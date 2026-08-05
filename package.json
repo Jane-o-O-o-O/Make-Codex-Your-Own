@@ -1,6 +1,24 @@
 {
   "name": "codex-trace-viewer",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first observability workspace for Codex rollout traces and daily reviews.",
+  "author": "Jin Zhangzheng",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jane-o-O-o-O/Make-Codex-Your-Own.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Jane-o-O-o-O/Make-Codex-Your-Own/issues"
+  },
+  "homepage": "https://github.com/Jane-o-O-o-O/Make-Codex-Your-Own",
+  "keywords": [
+    "codex",
+    "observability",
+    "tracing",
+    "developer-tools",
+    "daily-review"
+  ],
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
