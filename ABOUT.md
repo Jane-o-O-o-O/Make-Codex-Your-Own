@@ -43,4 +43,3 @@ Contributions and issue reports are welcome through the project's GitHub
 repository:
 
 <https://github.com/Jane-o-O-o-O/Make-Codex-Your-Own>
-
