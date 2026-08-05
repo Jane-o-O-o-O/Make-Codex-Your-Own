@@ -39,7 +39,8 @@
           <button class="tab" data-view="conversation">对话</button>
         </div>
         <div id="timeline-list" class="timeline-list"></div>
-        <section class="trace-graph"><div class="graph-title">关系图 <button id="graph-fit" title="适配关系图">⌗</button></div><div id="graph-canvas" class="graph-canvas empty">选择一个会话</div></section>
+        <div id="trace-resize-handle" class="trace-resize-handle" role="separator" aria-orientation="horizontal" aria-label="调整树和关系图高度" aria-valuemin="190" aria-valuemax="600" aria-valuenow="250" tabindex="0"></div>
+        <section class="trace-graph"><div class="graph-title"><span>关系图</span><span class="graph-controls"><button id="graph-zoom-out" title="缩小" aria-label="缩小">−</button><button id="graph-zoom-in" title="放大" aria-label="放大">＋</button><button id="graph-fit" title="适配关系图" aria-label="适配关系图">⌗</button></span></div><div id="graph-canvas" class="graph-canvas empty">选择一个会话</div></section>
       </section>
       <aside class="details pane">
         <div id="trace-summary" class="trace-summary empty">选择一个会话</div>

@@ -102,7 +102,7 @@ button { cursor: pointer; }
 .onboarding-actions { display: flex; gap: 8px; margin-top: 4px; }
 .secondary-action { padding: 8px 13px; border: 1px solid #3b3b40; border-radius: 5px; color: #c4c4ca; background: #242428; font-size: 11px; }
 .pane { min-width: 0; overflow: hidden; background: #111113; }
-.trace-navigation { display: grid; grid-template-rows: 48px 42px minmax(220px, 1fr) minmax(190px, 34%); }
+.trace-navigation { display: grid; grid-template-rows: 48px 42px minmax(220px, 1fr) 6px var(--trace-graph-height, minmax(190px, 34%)); }
 .trace-tools { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #28282b; }
 .tree-search { min-width: 0; flex: 1; height: 32px; padding: 0 9px; border-radius: 5px; background: #171719; }
 .tree-search input { height: 32px; }
@@ -143,6 +143,11 @@ button { cursor: pointer; }
 .waterfall-bar.tool { background: #f59e0b; }
 .waterfall-bar.code { background: #38bdf8; }
 
+.trace-resize-handle { position: relative; z-index: 3; min-height: 6px; border-top: 1px solid #29292e; border-bottom: 1px solid #09090a; background: #161619; cursor: row-resize; touch-action: none; }
+.trace-resize-handle::after { position: absolute; top: 2px; left: 50%; width: 34px; height: 1px; border-top: 1px solid #55555e; content: ""; transform: translateX(-50%); }
+.trace-resize-handle:hover, .trace-resize-handle.is-dragging { background: #25212b; }
+.trace-resize-handle:hover::after, .trace-resize-handle.is-dragging::after { border-color: #c084fc; }
+.trace-navigation.is-resizing, .trace-navigation.is-resizing * { cursor: row-resize !important; user-select: none !important; }
 .trace-graph { min-height: 0; display: grid; grid-template-rows: 34px 1fr; border-top: 1px solid #343438; background: #0d0d0f; }
 .graph-title { display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid #28282b; color: #a8a8af; font-size: 11px; font-weight: 700; }
 .graph-title button { width: 25px; height: 25px; }
@@ -299,8 +304,9 @@ dialog::backdrop { background: #000a; }
   .mode { padding: 0 7px; font-size: 10px; }
   .workspace { display: block; height: calc(100vh - 58px); }
   .workspace > .mobile-view-tabs { display: flex; height: 42px; }
-  .trace-navigation { height: calc(100% - 42px); display: grid; grid-template-rows: 48px 42px 1fr 0; }
+  .trace-navigation { height: calc(100% - 42px); display: grid; grid-template-rows: 48px 42px 1fr 0 0; }
   .trace-graph { display: none; }
+  .trace-resize-handle { display: none; }
   .details { height: 100%; display: block; }
   .mobile-view-tabs { display: flex; align-items: center; gap: 3px; padding: 5px 8px; border-bottom: 1px solid #28282b; background: #151517; }
   .mobile-view-tabs button { flex: 1; height: 30px; border: 0; border-radius: 4px; color: #85858d; background: transparent; font-size: 11px; }
@@ -351,9 +357,10 @@ dialog::backdrop { background: #000a; }
 }
 
 /* Trace workspace: dense, connected navigation inspired by Langfuse. */
-.trace-navigation { grid-template-rows: 48px 42px minmax(240px, 1fr) minmax(250px, 38%); }
-.trace-navigation.graph-focused { grid-template-rows: 48px 42px minmax(0, 1fr) 0; }
+.trace-navigation { grid-template-rows: 48px 42px minmax(240px, 1fr) 6px var(--trace-graph-height, minmax(250px, 38%)); }
+.trace-navigation.graph-focused { grid-template-rows: 48px 42px minmax(0, 1fr) 0 0; }
 .trace-navigation.graph-focused .trace-graph { display: none; }
+.trace-navigation.graph-focused .trace-resize-handle { display: none; }
 .trace-tools { background: #121214; }
 .tabs { background: #121214; }
 .tab { position: relative; border-radius: 4px; }
@@ -434,8 +441,9 @@ dialog::backdrop { background: #000a; }
 .graph-truncated { border-top: 1px solid #3b2d4d; background: #211b2a; }
 
 @media (max-width: 900px) {
-  .trace-navigation { grid-template-rows: 48px 42px 1fr 0; }
+  .trace-navigation { grid-template-rows: 48px 42px 1fr 0 0; }
   .trace-graph { display: none; }
+  .trace-resize-handle { display: none; }
   .graph-viewport { min-height: 100%; padding: 14px 12px 24px; }
   .graph-stage { min-width: 0; }
   .waterfall-head, .waterfall-body, .waterfall-legend { min-width: 700px; }
@@ -444,4 +452,24 @@ dialog::backdrop { background: #000a; }
   .waterfall-chart, .waterfall-scale { min-width: 420px; }
   .waterfall-label-head { min-width: 0; }
   .graph-card { width: 210px !important; }
+}
+
+/* The graph follows the trace from top to bottom, with a pannable and zoomable canvas. */
+.graph-title > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
+.graph-title .graph-controls, .graph-expanded-head .graph-controls { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.graph-controls button { display: grid; width: 25px; height: 25px; place-items: center; padding: 0; border: 1px solid #3b3b42; border-radius: 5px; color: #a8a8af; background: #1a1a1d; font-size: 14px; line-height: 1; }
+.graph-controls button:hover { color: #fff; background: #29292d; }
+.graph-expanded-head { gap: 9px; }
+.graph-expanded-meta { color: #696971; font-size: 9px; }
+.graph-viewport { cursor: grab; overscroll-behavior: contain; touch-action: none; user-select: none; }
+.graph-viewport.is-panning { cursor: grabbing; }
+.graph-stage { transform-origin: 0 0; }
+.graph-edge { stroke: #54545e; stroke-width: 1.3; }
+.graph-card { z-index: 1; }
+.graph-card.active { z-index: 2; }
+
+@media (max-width: 900px) {
+  .graph-expanded-meta { display: none; }
+  .graph-expanded-head { padding: 0 10px; }
+  .graph-controls button { width: 27px; height: 27px; }
 }

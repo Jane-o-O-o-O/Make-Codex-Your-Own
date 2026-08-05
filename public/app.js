@@ -4,7 +4,7 @@ const state = {
   traces: [], trace: null, traceTree: null, collapsedNodes: new Set(), selectedTraceId: null, selectedRowId: null, view: "tree",
   reviews: [], selectedReviewDate: null, selectedDay: null, settings: null, config: null, sessionQuery: "", treeQuery: "",
   sessionStatus: "all", sessionModel: "all", route: "days", mobileView: "tree", isInteracting: false,
-  lastRefreshAt: null, refreshInFlight: false,
+  lastRefreshAt: null, refreshInFlight: false, graphScale: 1, graphScrollLeft: 0, graphScrollTop: 0, graphPanelHeight: null,
 };
 const elements = {
   dayBrowser: document.querySelector("#day-browser"),
@@ -25,6 +25,8 @@ const elements = {
   expandAll: document.querySelector("#expand-all"),
   graph: document.querySelector("#graph-canvas"),
   graphFit: document.querySelector("#graph-fit"),
+  graphZoomIn: document.querySelector("#graph-zoom-in"),
+  graphZoomOut: document.querySelector("#graph-zoom-out"),
   summary: document.querySelector("#trace-summary"),
   timeline: document.querySelector("#timeline-list"),
   details: document.querySelector("#details"),
@@ -36,6 +38,7 @@ const elements = {
   mobileTabs: document.querySelector("#mobile-view-tabs"),
   detailsPane: document.querySelector(".details"),
   traceNavigation: document.querySelector(".trace-navigation"),
+  traceResizeHandle: document.querySelector("#trace-resize-handle"),
   traceWorkspace: document.querySelector("#trace-workspace"),
   reviewsWorkspace: document.querySelector("#reviews-workspace"),
   reviewCount: document.querySelector("#review-count"),
@@ -471,8 +474,10 @@ function renderConversation() {
 
 function renderGraphInTimeline() {
   const rows = flattenTree(state.traceTree, new Set());
-  elements.timeline.innerHTML = `<div class="graph-expanded-head"><span>轨迹关系图</span><span>${rows.length} 个节点</span></div><div class="graph-viewport">${buildGraphMarkup(100)}</div>${rows.length > 100 ? '<div class="graph-truncated">关系图已显示前 100 个节点，树和时间线仍保留全部节点。</div>' : ""}`;
+  elements.timeline.innerHTML = `<div class="graph-expanded-head"><span>轨迹关系图</span><span class="graph-expanded-meta">${rows.length} 个节点 · 拖动平移 · 滚轮缩放</span><span class="graph-controls"><button data-graph-action="zoom-out" title="缩小" aria-label="缩小">−</button><button data-graph-action="zoom-in" title="放大" aria-label="放大">＋</button><button data-graph-action="fit" title="适配关系图" aria-label="适配关系图">⌗</button></span></div><div class="graph-viewport">${buildGraphMarkup(100)}</div>${rows.length > 100 ? '<div class="graph-truncated">关系图已显示前 100 个节点，树和时间线仍保留全部节点。</div>' : ""}`;
   wireGraphNodes(elements.timeline);
+  wireGraphCanvas(elements.timeline);
+  if (state.graphScale === 1 && state.graphScrollLeft === 0 && state.graphScrollTop === 0) fitGraphViewport(elements.timeline.querySelector(".graph-viewport"));
 }
 
 function renderGraph() {
@@ -481,6 +486,8 @@ function renderGraph() {
   elements.graph.classList.remove("empty");
   elements.graph.innerHTML = `<div class="graph-viewport">${buildGraphMarkup(100)}</div>${allRows.length > 100 ? `<div class="graph-truncated">关系图已显示前 100 个节点，完整节点仍可在树和时间线中查看。</div>` : ""}`;
   wireGraphNodes(elements.graph);
+  wireGraphCanvas(elements.graph);
+  if (state.graphScale === 1 && state.graphScrollLeft === 0 && state.graphScrollTop === 0) fitGraphViewport(elements.graph.querySelector(".graph-viewport"));
 }
 
 function graphLayout(root, limit) {
@@ -491,49 +498,47 @@ function graphLayout(root, limit) {
     const item = { node, depth, parentId, y: 0 };
     rows.push(item);
     if (!node.children.length) {
-      item.y = leafIndex;
+      item.x = leafIndex;
       leafIndex += 1;
-      return item.y;
+      return item.x;
     }
-    const childYs = [];
+    const childXs = [];
     for (const child of node.children) {
-      const childY = visit(child, depth + 1, node.id);
-      if (childY !== null) childYs.push(childY);
+      const childX = visit(child, depth + 1, node.id);
+      if (childX !== null) childXs.push(childX);
     }
-    item.y = depth === 0
-      ? 0
-      : childYs.length
-        ? childYs.reduce((sum, value) => sum + value, 0) / childYs.length
-        : leafIndex++;
-    return item.y;
+    item.x = childXs.length
+      ? childXs.reduce((sum, value) => sum + value, 0) / childXs.length
+      : leafIndex++;
+    return item.x;
   }
   visit(root, 0, null);
-  return { rows, leafCount: Math.max(1, leafIndex) };
+  return { rows, leafCount: Math.max(1, leafIndex), maxDepth: Math.max(0, ...rows.map((item) => item.depth)) };
 }
 
 function buildGraphMarkup(limit) {
-  const { rows, leafCount } = graphLayout(state.traceTree, limit);
-  const maxDepth = Math.max(0, ...rows.map((item) => item.depth));
-  const cardWidth = 220;
+  const { rows, leafCount, maxDepth } = graphLayout(state.traceTree, limit);
+  const cardWidth = 236;
   const cardHeight = 46;
-  const columnGap = 58;
-  const rowGap = 66;
-  const stageWidth = (maxDepth + 1) * (cardWidth + columnGap) + 28;
-  const stageHeight = Math.max(220, leafCount * rowGap + 30);
+  const columnGap = 38;
+  const rowGap = 62;
+  const stageWidth = Math.max(340, leafCount * (cardWidth + columnGap) + 28);
+  const stageHeight = Math.max(240, (maxDepth + 1) * (cardHeight + rowGap) + 28);
   const positions = new Map(rows.map((item) => [item.node.id, {
-    x: 18 + item.depth * (cardWidth + columnGap),
-    y: 15 + item.y * rowGap,
+    x: 14 + item.x * (cardWidth + columnGap),
+    y: 14 + item.depth * (cardHeight + rowGap),
   }]));
+  const markerId = `graph-arrow-${++graphRenderSequence}`;
   const edges = rows.filter((item) => item.parentId).map((item) => {
     const parent = positions.get(item.parentId);
     const child = positions.get(item.node.id);
     if (!parent || !child) return "";
-    const x1 = parent.x + cardWidth;
-    const y1 = parent.y + cardHeight / 2;
-    const x2 = child.x;
-    const y2 = child.y + cardHeight / 2;
-    const bend = x1 + Math.max(18, (x2 - x1) / 2);
-    return `<path class="graph-edge" d="M ${x1} ${y1} H ${bend} V ${y2} H ${x2}" />`;
+    const x1 = parent.x + cardWidth / 2;
+    const y1 = parent.y + cardHeight;
+    const x2 = child.x + cardWidth / 2;
+    const y2 = child.y;
+    const bend = y1 + Math.max(18, (y2 - y1) / 2);
+    return `<path class="graph-edge" marker-end="url(#${markerId})" d="M ${x1} ${y1} V ${bend} H ${x2} V ${y2}" />`;
   }).join("");
   const nodes = rows.map(({ node }) => {
     const position = positions.get(node.id);
@@ -541,11 +546,165 @@ function buildGraphMarkup(limit) {
       <span class="graph-card-icon node-type ${escapeHtml(node.type)}">${nodeIcon(node)}</span><span class="graph-card-content"><strong>${escapeHtml(node.title)}</strong><small>${escapeHtml(nodeTypeLabel(node.type))}</small></span><span class="graph-card-metric">${escapeHtml(formatNodeDuration(node))}</span>
     </button>`;
   }).join("");
-  return `<div class="graph-stage" style="width:${stageWidth}px;height:${stageHeight}px"><svg class="graph-edges" viewBox="0 0 ${stageWidth} ${stageHeight}" aria-hidden="true">${edges}</svg>${nodes}</div>`;
+  return `<div class="graph-stage" data-base-width="${stageWidth}" data-base-height="${stageHeight}" style="width:${stageWidth}px;height:${stageHeight}px;transform-origin:0 0;transform:scale(${state.graphScale})"><svg class="graph-edges" viewBox="0 0 ${stageWidth} ${stageHeight}" aria-hidden="true"><defs><marker id="${markerId}" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto"><path d="M 0 0 L 7 3.5 L 0 7 z" fill="#60606a" /></marker></defs>${edges}</svg>${nodes}</div>`;
 }
 
 function wireGraphNodes(container) {
   container.querySelectorAll("[data-node]").forEach((button) => button.addEventListener("click", () => selectTraceNode(button.dataset.node)));
+}
+
+let graphRenderSequence = 0;
+
+function graphScaleValue(value) {
+  return Math.min(1.8, Math.max(0.55, value));
+}
+
+function applyGraphScale(viewport, nextScale, anchorX = viewport.clientWidth / 2, anchorY = viewport.clientHeight / 2) {
+  const stage = viewport.querySelector(".graph-stage");
+  if (!stage) return;
+  const oldScale = state.graphScale;
+  const scale = graphScaleValue(nextScale);
+  const worldX = (viewport.scrollLeft + anchorX) / oldScale;
+  const worldY = (viewport.scrollTop + anchorY) / oldScale;
+  state.graphScale = scale;
+  stage.style.transform = `scale(${scale})`;
+  stage.style.marginRight = `${Math.max(0, Number(stage.dataset.baseWidth) * (scale - 1))}px`;
+  stage.style.marginBottom = `${Math.max(0, Number(stage.dataset.baseHeight) * (scale - 1))}px`;
+  requestAnimationFrame(() => {
+    viewport.scrollLeft = Math.max(0, worldX * scale - anchorX);
+    viewport.scrollTop = Math.max(0, worldY * scale - anchorY);
+    state.graphScrollLeft = viewport.scrollLeft;
+    state.graphScrollTop = viewport.scrollTop;
+  });
+}
+
+function wireGraphCanvas(container) {
+  const viewport = container.querySelector(".graph-viewport");
+  if (!viewport) return;
+  const stage = viewport.querySelector(".graph-stage");
+  if (!stage) return;
+  viewport.style.cursor = "grab";
+  stage.style.marginRight = `${Math.max(0, Number(stage.dataset.baseWidth) * (state.graphScale - 1))}px`;
+  stage.style.marginBottom = `${Math.max(0, Number(stage.dataset.baseHeight) * (state.graphScale - 1))}px`;
+  viewport.scrollLeft = state.graphScrollLeft;
+  viewport.scrollTop = state.graphScrollTop;
+  let drag = null;
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("[data-node]")) return;
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add("is-panning");
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!drag) return;
+    viewport.scrollLeft = drag.left - (event.clientX - drag.x);
+    viewport.scrollTop = drag.top - (event.clientY - drag.y);
+    state.graphScrollLeft = viewport.scrollLeft;
+    state.graphScrollTop = viewport.scrollTop;
+  });
+  const stopDragging = () => {
+    drag = null;
+    viewport.classList.remove("is-panning");
+  };
+  viewport.addEventListener("pointerup", stopDragging);
+  viewport.addEventListener("pointercancel", stopDragging);
+  viewport.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    applyGraphScale(viewport, state.graphScale * (event.deltaY < 0 ? 1.1 : 0.9), event.offsetX, event.offsetY);
+  }, { passive: false });
+  container.querySelectorAll("[data-graph-action]").forEach((button) => button.addEventListener("click", () => {
+    const action = button.dataset.graphAction;
+    if (action === "zoom-in") applyGraphScale(viewport, state.graphScale * 1.15);
+    if (action === "zoom-out") applyGraphScale(viewport, state.graphScale * 0.87);
+    if (action === "fit") fitGraphViewport(viewport);
+  }));
+}
+
+function graphPanelBounds() {
+  const navigationHeight = elements.traceNavigation?.getBoundingClientRect().height || 0;
+  const fixedRows = 48 + 42 + 6;
+  const minTimelineHeight = 240;
+  const minGraphHeight = 190;
+  return {
+    min: minGraphHeight,
+    max: Math.max(minGraphHeight, navigationHeight - fixedRows - minTimelineHeight),
+  };
+}
+
+function setGraphPanelHeight(height) {
+  if (!elements.traceNavigation) return;
+  const bounds = graphPanelBounds();
+  const nextHeight = Math.round(Math.min(bounds.max, Math.max(bounds.min, height)));
+  state.graphPanelHeight = nextHeight;
+  elements.traceNavigation.style.setProperty("--trace-graph-height", `${nextHeight}px`);
+  elements.traceResizeHandle?.setAttribute("aria-valuemin", String(bounds.min));
+  elements.traceResizeHandle?.setAttribute("aria-valuemax", String(bounds.max));
+  elements.traceResizeHandle?.setAttribute("aria-valuenow", String(nextHeight));
+}
+
+function wireTraceResizeHandle() {
+  const handle = elements.traceResizeHandle;
+  if (!handle || !elements.traceNavigation) return;
+  let drag = null;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || window.matchMedia("(max-width: 900px)").matches) return;
+    const graphHeight = elements.traceNavigation.querySelector(".trace-graph")?.getBoundingClientRect().height || 250;
+    drag = { y: event.clientY, graphHeight };
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add("is-dragging");
+    elements.traceNavigation.classList.add("is-resizing");
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!drag) return;
+    setGraphPanelHeight(drag.graphHeight - (event.clientY - drag.y));
+  });
+  const stopDragging = () => {
+    drag = null;
+    handle.classList.remove("is-dragging");
+    elements.traceNavigation.classList.remove("is-resizing");
+  };
+  handle.addEventListener("pointerup", stopDragging);
+  handle.addEventListener("pointercancel", stopDragging);
+  handle.addEventListener("keydown", (event) => {
+    if (window.matchMedia("(max-width: 900px)").matches) return;
+    const current = state.graphPanelHeight || elements.traceNavigation.querySelector(".trace-graph")?.getBoundingClientRect().height || 250;
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      setGraphPanelHeight(current + (event.key === "ArrowUp" ? 24 : -24));
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      setGraphPanelHeight(graphPanelBounds().min);
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      setGraphPanelHeight(graphPanelBounds().max);
+    }
+  });
+}
+
+function fitGraphViewport(viewport) {
+  const stage = viewport?.querySelector(".graph-stage");
+  if (!stage) return;
+  const baseWidth = Number(stage.dataset.baseWidth);
+  const scale = Math.min(1, Math.max(0.55, (viewport.clientWidth - 28) / baseWidth));
+  const root = stage.querySelector(".graph-card");
+  state.graphScrollTop = 0;
+  state.graphScale = scale;
+  stage.style.transform = `scale(${scale})`;
+  stage.style.marginRight = `${Math.max(0, baseWidth * (scale - 1))}px`;
+  stage.style.marginBottom = `${Math.max(0, Number(stage.dataset.baseHeight) * (scale - 1))}px`;
+  const centerRoot = () => {
+    const rootCenter = root ? root.offsetLeft + root.offsetWidth / 2 : baseWidth / 2;
+    const targetLeft = rootCenter * scale - viewport.clientWidth / 2;
+    const maxLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+    state.graphScrollLeft = Math.min(maxLeft, Math.max(0, targetLeft));
+    viewport.scrollLeft = state.graphScrollLeft;
+    viewport.scrollTop = 0;
+  };
+  centerRoot();
+  requestAnimationFrame(centerRoot);
 }
 
 function nodeTypeLabel(type) {
@@ -766,6 +925,9 @@ function installTrace(id, trace, nodeId = "") {
   state.trace = trace;
   state.traceTree = buildTraceTree(trace);
   state.collapsedNodes = new Set();
+  state.graphScale = 1;
+  state.graphScrollLeft = 0;
+  state.graphScrollTop = 0;
   state.selectedRowId = nodeId && findTraceNode(state.traceTree, nodeId) ? nodeId : state.traceTree.id;
   showTraceWorkspace(id);
   applyMobilePanel("tree");
@@ -1044,18 +1206,10 @@ elements.breadcrumbDay.addEventListener("click", () => showSessions(state.select
 elements.refresh.addEventListener("click", () => refresh());
 elements.refreshInterval.addEventListener("change", scheduleRefresh);
 elements.autoRefresh.addEventListener("change", scheduleRefresh);
-function fitGraph() {
-  const viewport = elements.graph.querySelector(".graph-viewport");
-  const stage = viewport?.querySelector(".graph-stage");
-  if (!viewport || !stage) return;
-  const scale = Math.min(1, Math.max(0.55, (viewport.clientWidth - 28) / stage.offsetWidth));
-  stage.style.transformOrigin = "top left";
-  stage.style.transform = `scale(${scale})`;
-  stage.style.marginRight = `${stage.offsetWidth * (1 - scale)}px`;
-  stage.style.marginBottom = `${stage.offsetHeight * (1 - scale)}px`;
-  viewport.scrollTo({ top: 0, left: 0, behavior: "smooth" });
-}
-elements.graphFit.addEventListener("click", () => { fitGraph(); elements.graph.classList.add("fit-flash"); setTimeout(() => elements.graph.classList.remove("fit-flash"), 500); });
+elements.graphFit.addEventListener("click", () => { fitGraphViewport(elements.graph.querySelector(".graph-viewport")); elements.graph.classList.add("fit-flash"); setTimeout(() => elements.graph.classList.remove("fit-flash"), 500); });
+elements.graphZoomIn.addEventListener("click", () => applyGraphScale(elements.graph.querySelector(".graph-viewport"), state.graphScale * 1.15));
+elements.graphZoomOut.addEventListener("click", () => applyGraphScale(elements.graph.querySelector(".graph-viewport"), state.graphScale * 0.87));
+wireTraceResizeHandle();
 document.querySelectorAll(".mode").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 elements.settingsButton.addEventListener("click", openSettings);
 elements.settingsDialog.addEventListener("close", () => {
@@ -1074,6 +1228,9 @@ elements.settingsForm.addEventListener("submit", async (event) => {
 });
 window.addEventListener("popstate", syncRouteFromHash);
 window.addEventListener("hashchange", syncRouteFromHash);
+window.addEventListener("resize", () => {
+  if (state.graphPanelHeight != null && !window.matchMedia("(max-width: 900px)").matches) setGraphPanelHeight(state.graphPanelHeight);
+});
 document.addEventListener("pointerdown", () => { state.isInteracting = true; clearTimeout(state.interactionTimer); state.interactionTimer = setTimeout(() => { state.isInteracting = false; }, 1200); });
 document.addEventListener("keydown", () => { state.isInteracting = true; clearTimeout(state.interactionTimer); state.interactionTimer = setTimeout(() => { state.isInteracting = false; }, 1200); });
 function scheduleRefresh() {
