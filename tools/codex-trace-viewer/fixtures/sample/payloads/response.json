@@ -1,0 +1,4 @@
+{
+  "id": "resp_sample",
+  "output": [{ "role": "assistant", "content": "已完成检查，发现两个需要优先处理的问题。" }]
+}

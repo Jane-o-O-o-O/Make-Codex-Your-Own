@@ -1,0 +1,4 @@
+{
+  "model": "gpt-5",
+  "input": [{ "role": "user", "content": "检查项目并总结关键风险" }]
+}

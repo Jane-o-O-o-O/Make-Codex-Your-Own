@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "trace_id": "trace-sample",
+  "rollout_id": "rollout-sample",
+  "started_at_unix_ms": 1785808800000,
+  "ended_at_unix_ms": 1785808804200,
+  "status": "completed",
+  "root_thread_id": "thread-root",
+  "threads": {
+    "thread-root": {
+      "thread_id": "thread-root",
+      "agent_path": "/root",
+      "nickname": null,
+      "origin": { "type": "root" },
+      "execution": { "started_at_unix_ms": 1785808800000, "started_seq": 1, "ended_at_unix_ms": 1785808804200, "ended_seq": 9, "status": "completed" },
+      "default_model": "gpt-5",
+      "conversation_item_ids": ["item-user", "item-answer"]
+    }
+  },
+  "codex_turns": {
+    "turn-1": {
+      "codex_turn_id": "turn-1",
+      "thread_id": "thread-root",
+      "execution": { "started_at_unix_ms": 1785808800100, "started_seq": 2, "ended_at_unix_ms": 1785808804100, "ended_seq": 8, "status": "completed" },
+      "input_item_ids": ["item-user"]
+    }
+  },
+  "conversation_items": {
+    "item-user": {
+      "item_id": "item-user", "thread_id": "thread-root", "codex_turn_id": "turn-1", "first_seen_at_unix_ms": 1785808800100,
+      "role": "user", "channel": null, "kind": "message", "agent_message": null,
+      "body": { "parts": [{ "type": "text", "text": "检查项目并总结关键风险" }] }, "call_id": null, "produced_by": [{ "type": "user_input" }]
+    },
+    "item-answer": {
+      "item_id": "item-answer", "thread_id": "thread-root", "codex_turn_id": "turn-1", "first_seen_at_unix_ms": 1785808803900,
+      "role": "assistant", "channel": "final", "kind": "message", "agent_message": null,
+      "body": { "parts": [{ "type": "text", "text": "已完成检查，发现两个需要优先处理的问题。" }] }, "call_id": null,
+      "produced_by": [{ "type": "inference", "inference_call_id": "inference-1" }]
+    }
+  },
+  "inference_calls": {
+    "inference-1": {
+      "inference_call_id": "inference-1", "thread_id": "thread-root", "codex_turn_id": "turn-1",
+      "execution": { "started_at_unix_ms": 1785808800200, "started_seq": 3, "ended_at_unix_ms": 1785808804000, "ended_seq": 7, "status": "completed" },
+      "model": "gpt-5", "provider_name": "openai", "response_id": "resp_sample", "upstream_request_id": "req_sample",
+      "request_item_ids": ["item-user"], "response_item_ids": ["item-answer"], "tool_call_ids_started_by_response": ["tool-1"],
+      "usage": { "input_tokens": 1420, "cached_input_tokens": 800, "cache_write_input_tokens": 0, "output_tokens": 218, "reasoning_output_tokens": 96 },
+      "raw_request_payload_id": "payload-request", "raw_response_payload_id": "payload-response"
+    }
+  },
+  "code_cells": {},
+  "tool_calls": {
+    "tool-1": {
+      "tool_call_id": "tool-1", "mcp_call_id": null, "model_visible_call_id": "call-1", "code_mode_runtime_tool_id": null,
+      "thread_id": "thread-root", "started_by_codex_turn_id": "turn-1",
+      "execution": { "started_at_unix_ms": 1785808801000, "started_seq": 4, "ended_at_unix_ms": 1785808801800, "ended_seq": 5, "status": "completed" },
+      "requester": { "type": "model" }, "kind": { "type": "exec_command" }, "model_visible_call_item_ids": [], "model_visible_output_item_ids": [],
+      "terminal_operation_id": null, "summary": { "type": "generic", "label": "rg source tree", "input_preview": "rg TODO", "output_preview": "2 matches" },
+      "raw_invocation_payload_id": null, "raw_result_payload_id": null, "raw_runtime_payload_ids": []
+    }
+  },
+  "terminal_sessions": {}, "terminal_operations": {}, "compactions": {}, "compaction_requests": {}, "interaction_edges": {},
+  "raw_payloads": {
+    "payload-request": { "raw_payload_id": "payload-request", "kind": { "type": "inference_request" }, "path": "payloads/request.json" },
+    "payload-response": { "raw_payload_id": "payload-response", "kind": { "type": "inference_response" }, "path": "payloads/response.json" }
+  }
+}
