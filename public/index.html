@@ -9,21 +9,23 @@
   <body>
     <header class="topbar">
       <div class="brand"><span class="brand-mark">C</span><strong>Trace</strong></div>
-      <div class="session-picker-wrap">
-        <button id="session-picker" class="session-picker" type="button"><span id="active-session-name">Select session</span><span>⌄</span></button>
-        <div id="sessions-popover" class="sessions-popover hidden">
-          <div class="session-search"><span>⌕</span><input id="session-search" type="search" placeholder="Search sessions" /></div>
-          <div class="session-count-row">Sessions <span id="session-count">0</span></div>
-          <div id="sessions-list" class="sessions-list"></div>
-        </div>
-      </div>
+      <nav id="breadcrumb" class="breadcrumb"><button data-route="days">Days</button><span>/</span><button id="breadcrumb-day" class="hidden"></button><span id="breadcrumb-session-separator" class="hidden">/</span><strong id="active-session-name" class="hidden"></strong></nav>
       <nav class="mode-switch">
         <button class="mode active" data-mode="traces">Traces</button>
         <button class="mode" data-mode="reviews">Daily Reviews</button>
       </nav>
       <div class="toolbar"><label class="sr-only"><input id="auto-refresh" type="checkbox" checked /> Auto refresh</label><button id="settings-button" title="Settings">⚙</button><button id="refresh" title="Refresh">↻</button></div>
     </header>
-    <main id="trace-workspace" class="workspace">
+    <main id="day-browser" class="browser-page">
+      <div class="browser-header"><div><span class="eyebrow">OBSERVABILITY</span><h1>Codex activity</h1><p>Browse local traces by day.</p></div><div class="browser-total"><strong id="day-count">0</strong><span>active days</span></div></div>
+      <div id="days-list" class="days-list"></div>
+    </main>
+    <main id="session-browser" class="browser-page hidden">
+      <div class="browser-header"><div><button id="back-to-days" class="back-button">← Days</button><h1 id="sessions-day-title">Sessions</h1><p>Select a session to inspect its trace.</p></div><div class="browser-total"><strong id="session-count">0</strong><span>sessions</span></div></div>
+      <div class="session-search standalone"><span>⌕</span><input id="session-search" type="search" placeholder="Search sessions" /></div>
+      <div id="sessions-list" class="session-table"></div>
+    </main>
+    <main id="trace-workspace" class="workspace hidden">
       <section class="timeline pane trace-navigation">
         <div class="trace-tools"><div class="tree-search"><span>⌕</span><input id="tree-search" type="search" placeholder="Search observations" /></div><button id="expand-all" title="Expand all">↕</button></div>
         <div class="tabs" role="tablist">

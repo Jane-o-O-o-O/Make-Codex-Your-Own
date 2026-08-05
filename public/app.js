@@ -2,13 +2,19 @@ import { buildTraceTree, findTraceNode, flattenTree, nodeDetails } from "./trace
 
 const state = {
   traces: [], trace: null, traceTree: null, collapsedNodes: new Set(), selectedTraceId: null, selectedRowId: null, view: "tree",
-  reviews: [], selectedReviewDate: null, settings: null, config: null, sessionQuery: "", treeQuery: "",
+  reviews: [], selectedReviewDate: null, selectedDay: null, settings: null, config: null, sessionQuery: "", treeQuery: "",
 };
 const elements = {
+  dayBrowser: document.querySelector("#day-browser"),
+  sessionBrowser: document.querySelector("#session-browser"),
+  days: document.querySelector("#days-list"),
+  dayCount: document.querySelector("#day-count"),
+  sessionsDayTitle: document.querySelector("#sessions-day-title"),
+  breadcrumbDay: document.querySelector("#breadcrumb-day"),
+  breadcrumbSessionSeparator: document.querySelector("#breadcrumb-session-separator"),
+  backToDays: document.querySelector("#back-to-days"),
   count: document.querySelector("#session-count"),
   sessions: document.querySelector("#sessions-list"),
-  sessionPicker: document.querySelector("#session-picker"),
-  sessionsPopover: document.querySelector("#sessions-popover"),
   sessionSearch: document.querySelector("#session-search"),
   activeSessionName: document.querySelector("#active-session-name"),
   treeSearch: document.querySelector("#tree-search"),
@@ -56,25 +62,79 @@ async function api(url, options = {}) {
 
 function setMode(mode) {
   document.querySelectorAll(".mode").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
-  elements.traceWorkspace.classList.toggle("hidden", mode !== "traces");
+  if (mode === "traces") showDays();
+  else {
+    elements.dayBrowser.classList.add("hidden");
+    elements.sessionBrowser.classList.add("hidden");
+    elements.traceWorkspace.classList.add("hidden");
+  }
   elements.reviewsWorkspace.classList.toggle("hidden", mode !== "reviews");
   if (mode === "reviews") loadReviews();
 }
 
+function localDay(timestamp) {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function groupedDays() {
+  const groups = new Map();
+  for (const trace of state.traces) {
+    const day = localDay(trace.startedAtUnixMs);
+    if (!groups.has(day)) groups.set(day, []);
+    groups.get(day).push(trace);
+  }
+  return [...groups.entries()].sort(([left], [right]) => right.localeCompare(left));
+}
+
+function renderDays() {
+  const days = groupedDays();
+  elements.dayCount.textContent = days.length;
+  elements.days.innerHTML = days.map(([day, traces]) => {
+    const ready = traces.filter((trace) => trace.reducedAtUnixMs).length;
+    return `<button class="day-row" data-day="${day}"><span class="day-icon">▦</span><span class="day-main"><strong>${day}</strong><small>${new Date(`${day}T00:00:00`).toLocaleDateString([], { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</small></span><span class="day-stat"><strong>${traces.length}</strong><small>sessions</small></span><span class="day-stat"><strong>${ready}</strong><small>ready</small></span><span class="row-arrow">›</span></button>`;
+  }).join("") || '<div class="empty browser-empty">No trace days captured yet</div>';
+  elements.days.querySelectorAll("[data-day]").forEach((button) => button.addEventListener("click", () => showSessions(button.dataset.day)));
+}
+
+function showDays() {
+  state.selectedDay = null;
+  elements.dayBrowser.classList.remove("hidden");
+  elements.sessionBrowser.classList.add("hidden");
+  elements.traceWorkspace.classList.add("hidden");
+  elements.reviewsWorkspace.classList.add("hidden");
+  elements.breadcrumbDay.classList.add("hidden");
+  elements.breadcrumbSessionSeparator.classList.add("hidden");
+  elements.activeSessionName.classList.add("hidden");
+  renderDays();
+}
+
+function showSessions(day) {
+  state.selectedDay = day;
+  state.sessionQuery = "";
+  elements.sessionSearch.value = "";
+  elements.dayBrowser.classList.add("hidden");
+  elements.sessionBrowser.classList.remove("hidden");
+  elements.traceWorkspace.classList.add("hidden");
+  elements.sessionsDayTitle.textContent = day;
+  elements.breadcrumbDay.textContent = day;
+  elements.breadcrumbDay.classList.remove("hidden");
+  elements.breadcrumbSessionSeparator.classList.add("hidden");
+  elements.activeSessionName.classList.add("hidden");
+  renderSessions();
+}
+
 function renderSessions() {
-  elements.count.textContent = state.traces.length;
   const query = state.sessionQuery.trim().toLowerCase();
-  const traces = state.traces.filter((trace) => !query || `${trace.rolloutId} ${trace.id}`.toLowerCase().includes(query));
+  const traces = state.traces.filter((trace) => localDay(trace.startedAtUnixMs) === state.selectedDay && (!query || `${trace.rolloutId} ${trace.id}`.toLowerCase().includes(query)));
+  elements.count.textContent = traces.length;
   elements.sessions.innerHTML = traces.map((trace) => `
-    <button class="session ${trace.id === state.selectedTraceId ? "active" : ""}" data-trace="${escapeHtml(trace.id)}">
-      <span class="session-id">${escapeHtml(trace.rolloutId || trace.id)}</span>
-      <span class="session-meta"><span>${new Date(trace.startedAtUnixMs).toLocaleString()}</span><span>${trace.reducedAtUnixMs ? "ready" : "raw"}</span></span>
+    <button class="session-row ${trace.id === state.selectedTraceId ? "active" : ""}" data-trace="${escapeHtml(trace.id)}">
+      <span class="session-type-icon">⌁</span><span class="session-main"><strong>${escapeHtml(trace.rolloutId || trace.id)}</strong><small>${new Date(trace.startedAtUnixMs).toLocaleTimeString([], { hour12: false })}</small></span>
+      <span class="session-state ${trace.reducedAtUnixMs ? "ready" : "raw"}">${trace.reducedAtUnixMs ? "Ready" : "Raw"}</span><span class="row-arrow">›</span>
     </button>`).join("") || '<div class="empty">尚无 trace bundle</div>';
   elements.sessions.querySelectorAll("[data-trace]").forEach((button) => {
-    button.addEventListener("click", () => {
-      elements.sessionsPopover.classList.add("hidden");
-      loadTrace(button.dataset.trace);
-    });
+    button.addEventListener("click", () => loadTrace(button.dataset.trace));
   });
 }
 
@@ -197,10 +257,26 @@ function observationRow(node, depth) {
   return `<div class="observation-row ${node.id === state.selectedRowId ? "active" : ""}" data-node="${escapeHtml(node.id)}">
     <button class="collapse-button ${hasChildren ? "" : "invisible"}" data-collapse="${escapeHtml(node.id)}" title="展开或折叠">${collapsed ? "›" : "⌄"}</button>
     <span class="tree-indent" style="width:${depth * 16}px"></span>
-    <span class="node-type ${escapeHtml(node.type)}"></span>
+    <span class="node-type ${escapeHtml(node.type)}">${nodeIcon(node)}</span>
     <span class="observation-name"><strong>${escapeHtml(node.title)}</strong><small>${escapeHtml(nodeTypeLabel(node.type))}</small></span>
     <span class="observation-duration">${formatNodeDuration(node)}</span>
   </div>`;
+}
+
+function nodeIcon(node) {
+  if (node.type === "trace") return "⌁";
+  if (node.type === "turn") return "↪";
+  if (node.type === "generation") return "✦";
+  if (node.type === "code") return "⌘";
+  if (node.type === "compaction") return "⇲";
+  if (node.type === "tool") {
+    const kind = node.data?.kind?.type;
+    if (kind === "exec_command" || kind === "shell") return ">_";
+    if (kind === "mcp") return "◇";
+    if (kind === "apply_patch") return "±";
+    return "⚙";
+  }
+  return "•";
 }
 
 function wireObservationRows() {
@@ -223,7 +299,7 @@ function renderWaterfall() {
       const left = Math.max(0, ((node.start || start) - start) / range * 100);
       const width = Math.max(0.7, ((node.end || end) - (node.start || start)) / range * 100);
       return `<div class="waterfall-row ${node.id === state.selectedRowId ? "active" : ""}" data-node="${escapeHtml(node.id)}">
-        <span class="waterfall-label" style="padding-left:${8 + depth * 14}px"><span class="node-type ${escapeHtml(node.type)}"></span><strong>${escapeHtml(node.title)}</strong></span>
+        <span class="waterfall-label" style="padding-left:${8 + depth * 14}px"><span class="node-type ${escapeHtml(node.type)}">${nodeIcon(node)}</span><strong>${escapeHtml(node.title)}</strong></span>
         <span class="waterfall-chart"><i class="waterfall-bar ${escapeHtml(node.type)}" style="left:${left}%;width:${Math.min(width, 100 - left)}%" title="${escapeHtml(formatNodeDuration(node))}"></i></span>
       </div>`;
     }).join("")}</div>`;
@@ -316,7 +392,7 @@ async function selectTraceNode(id) {
 function renderNodeDetail(detail) {
   const metadata = detail.metadata.filter(([, value]) => value !== null && value !== undefined);
   return `<div class="detail-header">
-      <div><span class="detail-kind"><span class="node-type ${escapeHtml(detail.type)}"></span>${escapeHtml(nodeTypeLabel(detail.type))}</span><h2>${escapeHtml(detail.title)}</h2></div>
+      <div><span class="detail-kind"><span class="node-type ${escapeHtml(detail.type)}">${nodeIcon(detail)}</span>${escapeHtml(nodeTypeLabel(detail.type))}</span><h2>${escapeHtml(detail.title)}</h2></div>
       <span class="badge ${escapeHtml(detail.status)}">${escapeHtml(detail.status)}</span>
     </div>
     <div class="detail-tabs"><button class="active" data-detail-view="preview">Preview</button><button data-detail-view="json">JSON</button></div>
@@ -378,6 +454,11 @@ async function loadTrace(id, reduce = true) {
   state.collapsedNodes = new Set();
   state.selectedRowId = state.traceTree.id;
   elements.activeSessionName.textContent = state.trace.rollout_id || id;
+  elements.dayBrowser.classList.add("hidden");
+  elements.sessionBrowser.classList.add("hidden");
+  elements.traceWorkspace.classList.remove("hidden");
+  elements.breadcrumbSessionSeparator.classList.remove("hidden");
+  elements.activeSessionName.classList.remove("hidden");
   renderSummary();
   renderTimeline();
   renderGraph();
@@ -389,8 +470,7 @@ async function refresh() {
     const [config, result] = await Promise.all([api("/api/config"), api("/api/traces")]);
     state.config = config;
     state.traces = result.traces;
-    renderSessions();
-    if (!state.selectedTraceId && state.traces[0]) await loadTrace(state.traces[0].id);
+    renderDays();
   } catch (error) {
     elements.sessions.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
@@ -521,13 +601,12 @@ document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click",
   state.selectedRowId = null;
   renderTimeline();
 }));
-elements.sessionPicker.addEventListener("click", () => elements.sessionsPopover.classList.toggle("hidden"));
 elements.sessionSearch.addEventListener("input", () => { state.sessionQuery = elements.sessionSearch.value; renderSessions(); });
 elements.treeSearch.addEventListener("input", () => { state.treeQuery = elements.treeSearch.value; renderTimeline(); });
 elements.expandAll.addEventListener("click", () => { state.collapsedNodes.clear(); renderTimeline(); });
-document.addEventListener("click", (event) => {
-  if (!event.target.closest(".session-picker-wrap")) elements.sessionsPopover.classList.add("hidden");
-});
+elements.backToDays.addEventListener("click", showDays);
+document.querySelector('[data-route="days"]').addEventListener("click", showDays);
+elements.breadcrumbDay.addEventListener("click", () => showSessions(state.selectedDay));
 elements.refresh.addEventListener("click", refresh);
 document.querySelectorAll(".mode").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 elements.settingsButton.addEventListener("click", openSettings);
