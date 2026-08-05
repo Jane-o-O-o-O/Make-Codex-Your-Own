@@ -322,6 +322,7 @@ function currentRows() {
 
 function renderTimeline() {
   if (!state.trace) return;
+  elements.traceNavigation.classList.toggle("graph-focused", state.view === "graph");
   if (state.view === "tree") {
     renderObservationTree();
     return;
@@ -353,8 +354,27 @@ function renderTimeline() {
 function renderObservationTree() {
   const query = state.treeQuery.trim().toLowerCase();
   const rows = query ? filteredTreeRows(state.traceTree, state.collapsedNodes, query) : flattenTree(state.traceTree, state.collapsedNodes);
-  elements.timeline.innerHTML = `<div class="observation-header"><span>观察节点</span><span>耗时</span></div>${rows.map(({ node, depth }) => observationRow(node, depth)).join("")}`;
+  elements.timeline.innerHTML = `<div class="observation-header"><span>观察节点</span><span>耗时</span></div>${rows.map(({ node, depth }, index) => observationRow(node, depth, treeRowMetadata(rows, index))).join("")}`;
   wireObservationRows();
+}
+
+function treeRowMetadata(rows, index) {
+  const depth = rows[index].depth;
+  const guides = [];
+  for (let level = 0; level < Math.max(0, depth - 1); level += 1) {
+    let continues = false;
+    for (let next = index + 1; next < rows.length; next += 1) {
+      const nextDepth = rows[next].depth;
+      if (nextDepth <= level) break;
+      if (nextDepth === level + 1) {
+        continues = true;
+        break;
+      }
+    }
+    guides.push(continues);
+  }
+  const nextDepth = rows[index + 1]?.depth;
+  return { guides, isLast: nextDepth == null || nextDepth <= depth };
 }
 
 function filteredTreeRows(root, collapsed, query) {
@@ -374,14 +394,16 @@ function filteredTreeRows(root, collapsed, query) {
   return rows.filter(({ node, depth }) => depth === 0 || !collapsed.has(node.id) || query);
 }
 
-function observationRow(node, depth) {
+function observationRow(node, depth, metadata = { guides: [], isLast: true }) {
   const hasChildren = node.children.length > 0;
   const collapsed = state.collapsedNodes.has(node.id);
+  const guides = metadata.guides.map((continues) => `<span class="tree-guide ${continues ? "continue" : ""}" aria-hidden="true"></span>`).join("");
+  const currentGuide = depth > 0 ? `<span class="tree-guide current ${metadata.isLast ? "last" : ""}" aria-hidden="true"></span>` : "";
   return `<div class="observation-row ${node.id === state.selectedRowId ? "active" : ""}" data-node="${escapeHtml(node.id)}" role="treeitem" tabindex="0" aria-expanded="${hasChildren ? String(!collapsed) : "false"}">
+    ${depth > 0 ? `<span class="tree-indent" aria-hidden="true">${guides}${currentGuide}</span>` : ""}
     <button class="collapse-button ${hasChildren ? "" : "invisible"}" data-collapse="${escapeHtml(node.id)}" title="展开或折叠" aria-label="${collapsed ? "展开" : "折叠"}">${collapsed ? "›" : "⌄"}</button>
-    <span class="tree-indent" style="width:${depth * 16}px"></span>
     <span class="node-type ${escapeHtml(node.type)}">${nodeIcon(node)}</span>
-    <span class="observation-name"><strong>${escapeHtml(node.title)}</strong><small>${escapeHtml(nodeTypeLabel(node.type))}</small></span>
+    <span class="observation-name"><strong>${escapeHtml(node.title)}</strong><small><span>${escapeHtml(nodeTypeLabel(node.type))}</span><span class="observation-state">${escapeHtml(statusLabel(node.status || "unknown"))}</span></small></span>
     <span class="observation-duration">${formatNodeDuration(node)}</span>
   </div>`;
 }
@@ -423,15 +445,17 @@ function renderWaterfall() {
   const start = state.trace.started_at_unix_ms;
   const end = Math.max(state.trace.ended_at_unix_ms || Date.now(), ...rows.map(({ node }) => node.end || node.start || start));
   const range = Math.max(1, end - start);
-  elements.timeline.innerHTML = `<div class="waterfall-head"><span>观察节点</span><span class="waterfall-scale"><i>0 ms</i><i>${formatMilliseconds(range / 2)}</i><i>${formatMilliseconds(range)}</i></span></div>
+  const scale = `<span class="waterfall-scale"><i>0 ms</i><i>${formatMilliseconds(range / 2)}</i><i>${formatMilliseconds(range)}</i></span>`;
+  elements.timeline.innerHTML = `<div class="waterfall-head"><span class="waterfall-label-head">观察节点</span>${scale}</div>
     <div class="waterfall-body">${rows.map(({ node, depth }) => {
       const left = Math.max(0, ((node.start || start) - start) / range * 100);
       const width = Math.max(0.7, ((node.end || end) - (node.start || start)) / range * 100);
+      const barEnd = Math.min(96, Math.max(1, left + Math.min(width, 100 - left)));
       return `<div class="waterfall-row ${node.id === state.selectedRowId ? "active" : ""}" data-node="${escapeHtml(node.id)}">
-        <span class="waterfall-label" style="padding-left:${8 + depth * 14}px"><span class="node-type ${escapeHtml(node.type)}">${nodeIcon(node)}</span><strong>${escapeHtml(node.title)}</strong></span>
-        <span class="waterfall-chart"><i class="waterfall-bar ${escapeHtml(node.type)}" style="left:${left}%;width:${Math.min(width, 100 - left)}%" title="${escapeHtml(formatNodeDuration(node))}"></i></span>
+        <span class="waterfall-label" style="padding-left:${10 + depth * 17}px"><span class="node-type ${escapeHtml(node.type)}">${nodeIcon(node)}</span><span class="waterfall-name"><strong>${escapeHtml(node.title)}</strong><small>${escapeHtml(nodeTypeLabel(node.type))}</small></span></span>
+        <span class="waterfall-chart"><i class="waterfall-bar ${escapeHtml(node.type)} ${node.status === "failed" ? "failed" : ""}" style="left:${left}%;width:${Math.min(width, 100 - left)}%" title="${escapeHtml(formatNodeDuration(node))}"></i><em style="left:${barEnd}%">${escapeHtml(formatNodeDuration(node))}</em></span>
       </div>`;
-    }).join("")}</div>`;
+    }).join("")}</div><div class="waterfall-legend"><span><i class="legend-dot trace"></i>Trace</span><span><i class="legend-dot turn"></i>Turn</span><span><i class="legend-dot generation"></i>Generation</span><span><i class="legend-dot tool"></i>Tool</span><span><i class="legend-dot code"></i>Code</span></div>`;
   elements.timeline.querySelectorAll("[data-node]").forEach((row) => row.addEventListener("click", () => selectTraceNode(row.dataset.node)));
 }
 
@@ -447,20 +471,81 @@ function renderConversation() {
 
 function renderGraphInTimeline() {
   const rows = flattenTree(state.traceTree, new Set());
-  elements.timeline.innerHTML = `<div class="graph-expanded-head"><span>轨迹关系图</span><span>${rows.length} 个节点</span></div><div class="graph-expanded">${rows.slice(0, 100).map(({ node, depth }) => `<button class="graph-node ${escapeHtml(node.type)} ${node.id === state.selectedRowId ? "active" : ""}" data-node="${escapeHtml(node.id)}" style="--depth:${depth}"><span>${nodeIcon(node)} ${escapeHtml(node.title)}</span><small>${formatNodeDuration(node)}</small></button>`).join("")}</div>${rows.length > 100 ? '<div class="graph-truncated">关系图已显示前 100 个节点，树和时间线仍保留全部节点。</div>' : ""}`;
-  elements.timeline.querySelectorAll("[data-node]").forEach((button) => button.addEventListener("click", () => selectTraceNode(button.dataset.node)));
+  elements.timeline.innerHTML = `<div class="graph-expanded-head"><span>轨迹关系图</span><span>${rows.length} 个节点</span></div><div class="graph-viewport">${buildGraphMarkup(100)}</div>${rows.length > 100 ? '<div class="graph-truncated">关系图已显示前 100 个节点，树和时间线仍保留全部节点。</div>' : ""}`;
+  wireGraphNodes(elements.timeline);
 }
 
 function renderGraph() {
   if (!state.traceTree) return;
   const allRows = flattenTree(state.traceTree, new Set());
-  const rows = allRows.slice(0, 100);
   elements.graph.classList.remove("empty");
-  elements.graph.innerHTML = `<div class="graph-flow">${rows.map(({ node, depth }, index) => `
-    <button class="graph-node ${escapeHtml(node.type)} ${node.id === state.selectedRowId ? "active" : ""}" data-node="${escapeHtml(node.id)}" style="--depth:${depth}">
-      <span>${nodeIcon(node)} ${escapeHtml(node.title)}</span><small>${formatNodeDuration(node)}</small>
-    </button>${index < rows.length - 1 ? '<i class="graph-line"></i>' : ""}`).join("")}</div>${allRows.length > 100 ? `<div class="graph-truncated">关系图已显示前 100 个节点，完整节点仍可在树和时间线中查看。</div>` : ""}`;
-  elements.graph.querySelectorAll("[data-node]").forEach((button) => button.addEventListener("click", () => selectTraceNode(button.dataset.node)));
+  elements.graph.innerHTML = `<div class="graph-viewport">${buildGraphMarkup(100)}</div>${allRows.length > 100 ? `<div class="graph-truncated">关系图已显示前 100 个节点，完整节点仍可在树和时间线中查看。</div>` : ""}`;
+  wireGraphNodes(elements.graph);
+}
+
+function graphLayout(root, limit) {
+  const rows = [];
+  let leafIndex = 0;
+  function visit(node, depth, parentId) {
+    if (rows.length >= limit) return null;
+    const item = { node, depth, parentId, y: 0 };
+    rows.push(item);
+    if (!node.children.length) {
+      item.y = leafIndex;
+      leafIndex += 1;
+      return item.y;
+    }
+    const childYs = [];
+    for (const child of node.children) {
+      const childY = visit(child, depth + 1, node.id);
+      if (childY !== null) childYs.push(childY);
+    }
+    item.y = depth === 0
+      ? 0
+      : childYs.length
+        ? childYs.reduce((sum, value) => sum + value, 0) / childYs.length
+        : leafIndex++;
+    return item.y;
+  }
+  visit(root, 0, null);
+  return { rows, leafCount: Math.max(1, leafIndex) };
+}
+
+function buildGraphMarkup(limit) {
+  const { rows, leafCount } = graphLayout(state.traceTree, limit);
+  const maxDepth = Math.max(0, ...rows.map((item) => item.depth));
+  const cardWidth = 220;
+  const cardHeight = 46;
+  const columnGap = 58;
+  const rowGap = 66;
+  const stageWidth = (maxDepth + 1) * (cardWidth + columnGap) + 28;
+  const stageHeight = Math.max(220, leafCount * rowGap + 30);
+  const positions = new Map(rows.map((item) => [item.node.id, {
+    x: 18 + item.depth * (cardWidth + columnGap),
+    y: 15 + item.y * rowGap,
+  }]));
+  const edges = rows.filter((item) => item.parentId).map((item) => {
+    const parent = positions.get(item.parentId);
+    const child = positions.get(item.node.id);
+    if (!parent || !child) return "";
+    const x1 = parent.x + cardWidth;
+    const y1 = parent.y + cardHeight / 2;
+    const x2 = child.x;
+    const y2 = child.y + cardHeight / 2;
+    const bend = x1 + Math.max(18, (x2 - x1) / 2);
+    return `<path class="graph-edge" d="M ${x1} ${y1} H ${bend} V ${y2} H ${x2}" />`;
+  }).join("");
+  const nodes = rows.map(({ node }) => {
+    const position = positions.get(node.id);
+    return `<button class="graph-card ${escapeHtml(node.type)} ${node.id === state.selectedRowId ? "active" : ""}" data-node="${escapeHtml(node.id)}" style="left:${position.x}px;top:${position.y}px;width:${cardWidth}px;height:${cardHeight}px" aria-label="${escapeHtml(`${nodeTypeLabel(node.type)} ${node.title}`)}">
+      <span class="graph-card-icon node-type ${escapeHtml(node.type)}">${nodeIcon(node)}</span><span class="graph-card-content"><strong>${escapeHtml(node.title)}</strong><small>${escapeHtml(nodeTypeLabel(node.type))}</small></span><span class="graph-card-metric">${escapeHtml(formatNodeDuration(node))}</span>
+    </button>`;
+  }).join("");
+  return `<div class="graph-stage" style="width:${stageWidth}px;height:${stageHeight}px"><svg class="graph-edges" viewBox="0 0 ${stageWidth} ${stageHeight}" aria-hidden="true">${edges}</svg>${nodes}</div>`;
+}
+
+function wireGraphNodes(container) {
+  container.querySelectorAll("[data-node]").forEach((button) => button.addEventListener("click", () => selectTraceNode(button.dataset.node)));
 }
 
 function nodeTypeLabel(type) {
@@ -959,7 +1044,18 @@ elements.breadcrumbDay.addEventListener("click", () => showSessions(state.select
 elements.refresh.addEventListener("click", () => refresh());
 elements.refreshInterval.addEventListener("change", scheduleRefresh);
 elements.autoRefresh.addEventListener("change", scheduleRefresh);
-elements.graphFit.addEventListener("click", () => { elements.graph.scrollTo({ top: 0, left: 0, behavior: "smooth" }); elements.graph.classList.add("fit-flash"); setTimeout(() => elements.graph.classList.remove("fit-flash"), 500); });
+function fitGraph() {
+  const viewport = elements.graph.querySelector(".graph-viewport");
+  const stage = viewport?.querySelector(".graph-stage");
+  if (!viewport || !stage) return;
+  const scale = Math.min(1, Math.max(0.55, (viewport.clientWidth - 28) / stage.offsetWidth));
+  stage.style.transformOrigin = "top left";
+  stage.style.transform = `scale(${scale})`;
+  stage.style.marginRight = `${stage.offsetWidth * (1 - scale)}px`;
+  stage.style.marginBottom = `${stage.offsetHeight * (1 - scale)}px`;
+  viewport.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+}
+elements.graphFit.addEventListener("click", () => { fitGraph(); elements.graph.classList.add("fit-flash"); setTimeout(() => elements.graph.classList.remove("fit-flash"), 500); });
 document.querySelectorAll(".mode").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 elements.settingsButton.addEventListener("click", openSettings);
 elements.settingsDialog.addEventListener("close", () => {
