@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -41,6 +41,8 @@ test("scheduled run date persists across service restarts", async (context) => {
 test("daily review aggregates sessions and stores JSON and Markdown", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "codex-insights-"));
   context.after(() => rm(dataRoot, { recursive: true, force: true }));
+  await mkdir(path.join(dataRoot, "bundle-1"), { recursive: true });
+  await writeFile(path.join(dataRoot, "bundle-1", "tool.json"), JSON.stringify({ command: "cat E:\\codex\\skills\\code-review\\SKILL.md" }));
   const timestamp = new Date(2026, 7, 4, 10, 0).getTime();
   const trace = {
     trace_id: "trace-1", rollout_id: "rollout-1", started_at_unix_ms: timestamp,
@@ -49,19 +51,75 @@ test("daily review aggregates sessions and stores JSON and Markdown", async (con
       call: { model: "gpt-5", provider_name: "openai", usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 30, reasoning_output_tokens: 10 } },
     },
     tool_calls: { tool: { kind: { type: "mcp", server: "docs", tool: "search" } } },
-    conversation_items: { user: { role: "user", body: { parts: [{ text: "hello" }] } } }, raw_payloads: {},
+    conversation_items: {
+      context: { role: "user", body: { parts: [{ text: "<environment_context>\n  <cwd>E:\\codex</cwd>\n</environment_context>" }] } },
+      metadata: { role: "user", body: { parts: [{ text: "# Files mentioned by the user: ## screenshot.png" }] } },
+      generated: { role: "user", body: { parts: [{ text: "You are a helpful assistant. You will be presented with a user prompt." }] } },
+      user: { role: "user", body: { parts: [{ text: "审查项目中的代码并总结风险" }] } },
+    },
+    raw_payloads: { invocation: { kind: { type: "tool_invocation" }, path: "tool.json" } },
   };
+  Object.defineProperty(trace, "__bundleId", { value: "bundle-1" });
   const report = await buildDailyReview({
-    date: "2026-08-04", traces: [trace], inventory: { skills: [], mcpServers: [{ id: "docs" }] },
+    date: "2026-08-04", traces: [trace], inventory: {
+      skills: [{ id: "code-review", path: "E:\\codex\\skills\\code-review\\SKILL.md" }],
+      mcpServers: [{ id: "docs" }],
+    },
     previousReviews: [], bundleRoot: dataRoot, settings: defaultSettings(dataRoot),
   });
   assert.deepEqual(report.summary, {
     sessions: 1, completedSessions: 1, activeMs: 5_000, runtimeTurns: 1, modelCalls: 1, toolCalls: 1,
-    inputTokens: 100, cachedInputTokens: 20, outputTokens: 30, reasoningTokens: 10, userMessages: 1, userCharacters: 5,
+    inputTokens: 100, cachedInputTokens: 20, outputTokens: 30, reasoningTokens: 10, userMessages: 1, userCharacters: 13,
   });
+  assert.deepEqual(report.toolUsage, { "MCP docs/search": 1 });
+  assert.deepEqual(report.skillUsage, { "code-review": 1 });
+  assert.equal(report.scenarioUsage["研究分析"].sessions, 1);
+  assert.equal(report.scenarioUsage["研究分析"].examples[0], "审查项目中的代码并总结风险");
+  assert.deepEqual(report.scenarioUsage["研究分析"].tools, { "MCP docs/search": 1 });
+  assert.deepEqual(report.scenarioUsage["研究分析"].skills, { "code-review": 1 });
   assert.deepEqual(report.mcpUsage, { docs: 1 });
   assert.deepEqual(report.cleanupRecommendations, []);
   await storeReview(report, dataRoot);
   assert.equal((await listReviews(dataRoot))[0].date, "2026-08-04");
   assert.match(await readFile(path.join(dataRoot, "reports", "2026-08-04.md"), "utf8"), /Codex Daily Review/);
+});
+
+test("daily review uses concrete labels for generic tool calls", async () => {
+  const timestamp = new Date(2026, 7, 4, 10, 0).getTime();
+  const report = await buildDailyReview({
+    date: "2026-08-04",
+    traces: [{
+      trace_id: "trace-generic", rollout_id: "rollout-generic", started_at_unix_ms: timestamp,
+      ended_at_unix_ms: timestamp + 1_000, status: "completed", codex_turns: {}, inference_calls: {},
+      tool_calls: { wait: { kind: { type: "other" }, summary: { type: "generic", label: "wait" } } },
+      conversation_items: { user: { role: "user", body: { parts: [{ text: "部署服务器 密码是secret" }] } } },
+    }],
+    inventory: { skills: [], mcpServers: [] }, previousReviews: [], bundleRoot: "data", settings: defaultSettings("data"),
+  });
+  assert.deepEqual(report.toolUsage, { wait: 1 });
+  assert.equal(report.scenarioUsage["部署运维"].examples[0], "部署服务器 密码是[已隐藏]");
+});
+
+test("daily review identifies long-unused tools, Skills, and MCP servers", async () => {
+  const dataRoot = "data";
+  const report = await buildDailyReview({
+    date: "2026-08-04",
+    traces: [],
+    inventory: {
+      skills: [{ id: "old-skill", path: "E:\\codex\\skills\\old-skill\\SKILL.md" }],
+      mcpServers: [{ id: "old-server" }],
+    },
+    previousReviews: [{
+      date: "2026-06-01",
+      summary: { sessions: 1 },
+      toolUsage: { exec_command: 3 },
+      skillUsage: { "old-skill": 1 },
+      mcpUsage: { "old-server": 2 },
+    }],
+    bundleRoot: dataRoot,
+    settings: { ...defaultSettings(dataRoot), inactiveToolDays: 30, inactiveSkillDays: 30, inactiveMcpDays: 30 },
+  });
+  assert.deepEqual(report.cleanupRecommendations.map(({ type, id }) => `${type}:${id}`).sort(), [
+    "mcp:old-server", "skill:old-skill", "tool:exec_command",
+  ]);
 });

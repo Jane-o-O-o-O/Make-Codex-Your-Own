@@ -17,6 +17,7 @@ export function defaultSettings(dataRoot) {
   return {
     scheduleTime: "23:30",
     enabled: true,
+    inactiveToolDays: 30,
     inactiveSkillDays: 30,
     inactiveMcpDays: 30,
     retentionDays: 365,
@@ -33,7 +34,7 @@ export function validateSettings(input, current) {
   } else if (input.scheduleTime !== undefined) {
     throw new Error("scheduleTime must use HH:MM in local time");
   }
-  for (const key of ["inactiveSkillDays", "inactiveMcpDays", "retentionDays"]) {
+  for (const key of ["inactiveToolDays", "inactiveSkillDays", "inactiveMcpDays", "retentionDays"]) {
     if (input[key] !== undefined) {
       const value = Number(input[key]);
       if (!Number.isInteger(value) || value < 1 || value > 3_650) throw new Error(`${key} must be an integer from 1 to 3650`);
@@ -152,8 +153,10 @@ export async function buildDailyReview({ date, traces, inventory, previousReview
     providers: {},
     projects: {},
     toolKinds: {},
+    toolUsage: {},
     mcpUsage: {},
     skillUsage: {},
+    scenarioUsage: {},
     hourlyStarts: Array(24).fill(0),
     habits: [],
     cleanupRecommendations: [],
@@ -184,6 +187,17 @@ async function addTrace(report, trace, bundleRoot, inventory) {
     activeMs, runtimeTurns: turns.length, modelCalls: calls.length, toolCalls: tools.length,
     project: await traceProject(trace, bundleRoot),
   };
+  const userText = traceUserText(trace);
+  const scenario = classifyScenario(userText, tools);
+  const scenarioStats = report.scenarioUsage[scenario] || {
+    sessions: 0, modelCalls: 0, toolCalls: 0, tools: {}, skills: {}, projects: {}, examples: [],
+  };
+  scenarioStats.sessions += 1;
+  scenarioStats.modelCalls += calls.length;
+  scenarioStats.toolCalls += tools.length;
+  if (session.project) increment(scenarioStats.projects, session.project);
+  if (userText && scenarioStats.examples.length < 3) scenarioStats.examples.push(truncateText(redactSensitiveText(userText), 160));
+  report.scenarioUsage[scenario] = scenarioStats;
   report.sessions.push(session);
   report.summary.sessions += 1;
   if (trace.status === "completed") report.summary.completedSessions += 1;
@@ -191,11 +205,9 @@ async function addTrace(report, trace, bundleRoot, inventory) {
   report.summary.runtimeTurns += turns.length;
   report.summary.modelCalls += calls.length;
   report.summary.toolCalls += tools.length;
-  for (const item of Object.values(trace.conversation_items || {})) {
-    if (item.role !== "user") continue;
-    report.summary.userMessages += 1;
-    report.summary.userCharacters += (item.body?.parts || []).reduce((sum, part) => sum + (part.text?.length || 0), 0);
-  }
+  const userMessages = traceUserMessages(trace);
+  report.summary.userMessages += userMessages.length;
+  report.summary.userCharacters += userMessages.reduce((sum, message) => sum + message.length, 0);
   if (session.project) increment(report.projects, session.project);
   report.hourlyStarts[new Date(trace.started_at_unix_ms).getHours()] += 1;
   for (const call of calls) {
@@ -207,18 +219,83 @@ async function addTrace(report, trace, bundleRoot, inventory) {
     report.summary.reasoningTokens += call.usage?.reasoning_output_tokens || 0;
   }
   for (const tool of tools) {
-    let kind = tool.kind?.type || tool.kind || "unknown";
-    let mcpServer = kind === "mcp" ? tool.kind?.server : null;
-    const label = tool.summary?.label || "";
-    const bridgedMcp = label.match(/^mcp__([^.]*)\./);
-    if (!mcpServer && bridgedMcp) {
-      mcpServer = bridgedMcp[1];
-      kind = `mcp:${mcpServer}`;
-    }
-    increment(report.toolKinds, kind);
-    if (mcpServer) increment(report.mcpUsage, mcpServer);
+    const descriptor = describeTool(tool);
+    increment(report.toolKinds, descriptor.kind);
+    increment(report.toolUsage, descriptor.label);
+    increment(scenarioStats.tools, descriptor.label);
+    if (descriptor.mcpServer) increment(report.mcpUsage, descriptor.mcpServer);
   }
-  await scanSkillUsage(report, trace, bundleRoot, inventory.skills);
+  await scanSkillUsage(report, trace, bundleRoot, inventory.skills, scenarioStats);
+}
+
+function traceUserText(trace) {
+  return traceUserMessages(trace).join(" ");
+}
+
+function traceUserMessages(trace) {
+  return Object.values(trace.conversation_items || {})
+    .filter((item) => item.role === "user")
+    .sort((left, right) => (left.first_seen_at_unix_ms || 0) - (right.first_seen_at_unix_ms || 0))
+    .map(conversationItemText)
+    .map(cleanUserMessage)
+    .filter(Boolean)
+}
+
+function conversationItemText(item) {
+  return (item.body?.parts || [])
+    .map((part) => part.text || part.summary || part.source || part.value || "")
+    .filter(Boolean)
+    .join(" ");
+}
+
+function cleanUserMessage(value) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (/^(?:<environment_context>|<system(?:\s|>)|# AGENTS(?:\.md)?\b|# Files mentioned by the user:|You are a helpful assistant\. You will be presented with a user prompt)/i.test(normalized)) return "";
+  return normalized;
+}
+
+function redactSensitiveText(value) {
+  return value
+    .replace(/((?:password|passwd|token|api[_ -]?key|secret|密码|口令)\s*(?:(?:是|为)|[:：=])\s*)[^\s,，;；]+/gi, "$1[已隐藏]")
+    .replace(/(sk-[a-z0-9_-]{8,})/gi, "[已隐藏密钥]");
+}
+
+function classifyScenario(userText, tools) {
+  const text = userText.toLowerCase();
+  const rules = [
+    ["部署运维", ["deploy", "deployment", "server", "ssh", "docker", "kubernetes", "port", "service", "上线", "部署", "服务器", "运维", "进程"]],
+    ["问题排查", ["bug", "error", "failed", "failure", "debug", "issue", "broken", "报错", "错误", "失败", "故障", "排查", "修复"]],
+    ["研究分析", ["research", "analyze", "analysis", "review", "compare", "explain", "summary", "investigate", "研究", "分析", "审查", "对比", "解释", "总结", "检查"]],
+    ["代码开发", ["code", "coding", "implement", "refactor", "function", "api", "typescript", "javascript", "rust", "python", "编程", "代码", "实现", "重构", "开发"]],
+    ["文档内容", ["readme", "document", "docs", "report", "write", "translate", "文章", "文档", "报告", "翻译", "写作"]],
+    ["自动化流程", ["script", "automation", "automate", "workflow", "pipeline", "cron", "batch", "脚本", "自动化", "流程", "定时"]],
+  ];
+  for (const [scenario, keywords] of rules) if (keywords.some((keyword) => text.includes(keyword))) return scenario;
+  const toolKinds = tools.map((tool) => describeTool(tool).kind);
+  if (toolKinds.some((kind) => kind.includes("exec") || kind.includes("shell"))) return "代码开发";
+  if (toolKinds.some((kind) => kind.startsWith("mcp:"))) return "研究分析";
+  return "日常问答";
+}
+
+function describeTool(tool) {
+  const rawKind = tool.kind;
+  let kind = typeof rawKind === "string" ? rawKind : rawKind?.type || rawKind?.name || "unknown";
+  let mcpServer = kind === "mcp" ? rawKind?.server : null;
+  let mcpTool = kind === "mcp" ? rawKind?.tool : null;
+  const summaryLabel = tool.summary?.label || "";
+  const bridgedMcp = summaryLabel.match(/^mcp__([^.]*)\.(.+)$/);
+  if (!mcpServer && bridgedMcp) {
+    mcpServer = bridgedMcp[1];
+    mcpTool = bridgedMcp[2];
+    kind = `mcp:${mcpServer}`;
+  }
+  if (mcpServer) return { kind, mcpServer, label: `MCP ${mcpServer}/${mcpTool || "call"}` };
+  if ((kind === "other" || kind === "unknown") && summaryLabel) return { kind, mcpServer: null, label: summaryLabel };
+  return { kind, mcpServer: null, label: kind };
+}
+
+function truncateText(value, length) {
+  return value.length > length ? `${value.slice(0, length - 1)}…` : value;
 }
 
 async function traceProject(trace, bundleRoot) {
@@ -231,7 +308,7 @@ async function traceProject(trace, bundleRoot) {
   return null;
 }
 
-async function scanSkillUsage(report, trace, bundleRoot, skills) {
+async function scanSkillUsage(report, trace, bundleRoot, skills, scenarioStats = null) {
   for (const reference of Object.values(trace.raw_payloads || {})) {
     if (reference.kind?.type !== "tool_invocation") continue;
     const payload = await readPayload(reference, trace, bundleRoot);
@@ -240,10 +317,16 @@ async function scanSkillUsage(report, trace, bundleRoot, skills) {
       const normalized = normalizePathText(text);
       const matched = skills.filter((skill) => normalized.includes(normalizePathText(skill.path)));
       if (matched.length) {
-        for (const skill of matched) increment(report.skillUsage, skill.id);
+        for (const skill of matched) {
+          increment(report.skillUsage, skill.id);
+          if (scenarioStats) increment(scenarioStats.skills, skill.id);
+        }
       } else {
         const fallback = normalized.match(/\/([^/]+)\/skill\.md/i)?.[1];
-        if (fallback) increment(report.skillUsage, fallback);
+        if (fallback) {
+          increment(report.skillUsage, fallback);
+          if (scenarioStats) increment(scenarioStats.skills, fallback);
+        }
       }
     }
   }
@@ -284,11 +367,17 @@ function buildHabits(report, previousReviews) {
     const callsPerTurn = report.summary.modelCalls / Math.max(1, report.summary.runtimeTurns);
     habits.push(`每个 runtime turn 平均触发 ${callsPerTurn.toFixed(1)} 次模型调用。`);
   }
-  const topTool = topEntry(report.toolKinds);
-  if (topTool) habits.push(`最常用工具类型是 ${topTool[0]}，共 ${topTool[1]} 次。`);
+  const topScenario = Object.entries(report.scenarioUsage || {}).sort(([, left], [, right]) => right.sessions - left.sessions)[0];
+  if (topScenario) habits.push(`最常见的使用场景是 ${topScenario[0]}，涉及 ${topScenario[1].sessions} 个 session。`);
+  const topTool = topEntry(report.toolUsage || report.toolKinds);
+  if (topTool) habits.push(`最常用工具是 ${topTool[0]}，共 ${topTool[1]} 次。`);
+  const topSkill = topEntry(report.skillUsage);
+  if (topSkill) habits.push(`最常使用的 Skill 是 ${skillDisplayName(topSkill[0])}，共观察到 ${topSkill[1]} 次。`);
+  const topMcp = topEntry(report.mcpUsage);
+  if (topMcp) habits.push(`最常使用的 MCP 服务是 ${topMcp[0]}，共 ${topMcp[1]} 次调用。`);
   if (report.summary.userMessages) habits.push(`共发送 ${report.summary.userMessages} 条用户消息，平均每条 ${Math.round(report.summary.userCharacters / report.summary.userMessages)} 个字符。`);
   const topProject = topEntry(report.projects);
-  if (topProject) habits.push(`最常使用 Codex 的项目是 ${topProject[0]}，涉及 ${topProject[1]} 个 session。`);
+  if (topProject) habits.push(`最常使用 Codex 的项目是 ${projectDisplayName(topProject[0])}，涉及 ${topProject[1]} 个 session。`);
   if (report.summary.inputTokens) {
     const cacheRate = report.summary.cachedInputTokens / report.summary.inputTokens * 100;
     habits.push(`输入 token 缓存命中占比约 ${cacheRate.toFixed(1)}%。`);
@@ -305,8 +394,14 @@ function buildCleanupRecommendations(report, inventory, previousReviews, setting
   const recommendations = [];
   const oldestDate = [report, ...previousReviews].map((item) => item.date).sort()[0];
   const observedDays = Math.floor((new Date(`${report.date}T00:00:00`).getTime() - new Date(`${oldestDate}T00:00:00`).getTime()) / DAY_MS) + 1;
+  const toolLastUsed = historicalLastUsed("toolUsage", report, previousReviews);
+  for (const [id, date] of historicalLastUsed("toolKinds", report, previousReviews)) if (!toolLastUsed.has(id)) toolLastUsed.set(id, date);
   const skillLastUsed = historicalLastUsed("skillUsage", report, previousReviews);
   const mcpLastUsed = historicalLastUsed("mcpUsage", report, previousReviews);
+  for (const [id, lastUsed] of toolLastUsed) {
+    const item = cleanupItem("tool", id, lastUsed, report.date, observedDays);
+    if (item.inactiveDays >= settings.inactiveToolDays) recommendations.push(item);
+  }
   for (const skill of inventory.skills) {
     const lastUsed = skillLastUsed.get(skill.id) || matchLastUsed(skillLastUsed, skill.id);
     if (!lastUsed && observedDays < settings.inactiveSkillDays) continue;
@@ -347,6 +442,30 @@ function topEntry(record) {
   return Object.entries(record).sort((a, b) => b[1] - a[1])[0] || null;
 }
 
+function topEntries(record, limit = 3) {
+  return Object.entries(record || {})
+    .sort(([, left], [, right]) => right - left)
+    .slice(0, limit)
+    .map(([name, count]) => `${name} (${count})`);
+}
+
+function skillDisplayName(value) {
+  const normalized = String(value).replaceAll("\\", "/");
+  const marker = normalized.toLowerCase().lastIndexOf("/skills/");
+  return marker >= 0 ? normalized.slice(marker + "/skills/".length) : normalized.split("/").at(-1) || normalized;
+}
+
+function projectDisplayName(value) {
+  const normalized = String(value).replaceAll("\\", "/");
+  return normalized.split("/").filter(Boolean).at(-1) || normalized;
+}
+
+function entriesAsMarkdown(record) {
+  return Object.entries(record || {})
+    .sort(([, left], [, right]) => right - left)
+    .map(([name, count]) => `- ${name}: ${count}`);
+}
+
 export async function storeReview(report, dataRoot) {
   const reportsDir = path.join(dataRoot, "reports");
   await mkdir(reportsDir, { recursive: true });
@@ -383,6 +502,13 @@ export function renderMarkdown(report) {
     `- Tool calls: ${summary.toolCalls}`,
     `- Tokens: ${summary.inputTokens} input / ${summary.outputTokens} output / ${summary.reasoningTokens} reasoning`,
     `- User messages: ${summary.userMessages} (${summary.userCharacters} characters)`,
+    "", "## Scenarios", "",
+    ...Object.entries(report.scenarioUsage || {})
+      .sort(([, left], [, right]) => right.sessions - left.sessions)
+      .map(([name, value]) => `- ${name}: ${value.sessions} sessions, ${value.toolCalls} tool calls; top tools: ${topEntries(value.tools).join(", ") || "none"}`),
+    "", "## Tool Usage", "", ...entriesAsMarkdown(report.toolUsage),
+    "", "## Skill Usage", "", ...entriesAsMarkdown(report.skillUsage),
+    "", "## MCP Usage", "", ...entriesAsMarkdown(report.mcpUsage),
     "", "## Habits", "", ...report.habits.map((item) => `- ${item}`),
     "", "## Cleanup Candidates", "",
     ...report.cleanupRecommendations.map((item) => `- ${item.type}: ${item.id} - ${item.reason}`), "",

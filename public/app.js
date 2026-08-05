@@ -790,22 +790,46 @@ function renderSelectedReview() {
   const cacheRate = summary.inputTokens ? summary.cachedInputTokens / summary.inputTokens * 100 : 0;
   const completionRate = summary.sessions ? summary.completedSessions / summary.sessions * 100 : 0;
   const delta = previous ? summary.sessions - previous.summary.sessions : null;
-  elements.reviewHeader.classList.remove("empty");
-  elements.reviewHeader.innerHTML = `<h1>${review.date} 使用复盘</h1><div class="metrics"><span>生成于 <strong>${new Date(review.generatedAtUnixMs).toLocaleString()}</strong></span><span>完成率 <strong>${completionRate.toFixed(0)}%</strong></span><span>活跃时间 <strong>${formatDuration(summary.activeMs)}</strong></span><span>缓存命中 <strong>${cacheRate.toFixed(1)}%</strong></span>${delta === null ? "" : `<span>较前一日 <strong>${delta >= 0 ? "+" : ""}${delta} 个会话</strong></span>`}</div>`;
-  elements.reviewContent.innerHTML = `
+  const scenarios = rankedEntries(review.scenarioUsage, 1);
+  const topScenario = scenarios[0];
+  const topTool = rankedEntries(review.toolUsage || review.toolKinds, 1)[0];
+  const inactiveCount = (review.cleanupRecommendations || []).length;
+  const statGrid = `
     <div class="stat-grid">
       ${statCard("会话", summary.sessions)}${statCard("运行时回合", summary.runtimeTurns)}${statCard("模型调用", summary.modelCalls)}
       ${statCard("工具调用", summary.toolCalls)}${statCard("输入 Token", summary.inputTokens.toLocaleString())}${statCard("输出 Token", summary.outputTokens.toLocaleString())}
       ${statCard("推理 Token", summary.reasoningTokens.toLocaleString())}${statCard("用户消息", summary.userMessages)}${statCard("缓存输入", summary.cachedInputTokens.toLocaleString())}
+    </div>`;
+  elements.reviewHeader.classList.remove("empty");
+  elements.reviewHeader.innerHTML = `<h1>${review.date} 使用复盘</h1><div class="metrics"><span class="review-generated">生成于 <strong>${new Date(review.generatedAtUnixMs).toLocaleString()}</strong></span><span>完成率 <strong>${completionRate.toFixed(0)}%</strong></span><span>活跃时间 <strong>${formatDuration(summary.activeMs)}</strong></span><span>缓存命中 <strong>${cacheRate.toFixed(1)}%</strong></span>${topScenario ? `<span>主场景 <strong>${escapeHtml(topScenario[0])}</strong></span>` : ""}${topTool ? `<span>高频工具 <strong>${escapeHtml(topTool[0])}</strong></span>` : ""}${inactiveCount ? `<span>长期未使用 <strong>${inactiveCount} 项</strong></span>` : ""}${delta === null ? "" : `<span>较前一日 <strong>${delta >= 0 ? "+" : ""}${delta} 个会话</strong></span>`}</div>`;
+  elements.reviewContent.innerHTML = `
+    ${reviewSection("使用习惯", `<ul class="habit-list">${(review.habits || []).map((habit) => `<li>${escapeHtml(habit)}</li>`).join("") || "<li>数据不足</li>"}</ul>`)}
+    ${reviewSection("使用场景", scenarioCards(review.scenarioUsage))}
+    <div class="review-columns">
+      ${reviewSection("高频工具", usageBars(review.toolUsage || review.toolKinds, 12, "tool"))}
+      ${reviewSection("Skill 使用", usageBars(review.skillUsage, 12, "skill"))}
+      ${reviewSection("MCP 使用", usageBars(review.mcpUsage, 12, "mcp"))}
     </div>
-    ${reviewSection("项目", usageBars(review.projects))}
-    ${reviewSection("Provider / 模型", usageBars({ ...(review.providers || {}), ...(review.models || {}) }))}
-    ${reviewSection("活跃时段", hourlyBars(review.hourlyStarts))}
-    ${reviewSection("使用习惯", `<ul class="habit-list">${review.habits.map((habit) => `<li>${escapeHtml(habit)}</li>`).join("") || "<li>数据不足</li>"}</ul>`)}
-    ${reviewSection("工具分布", usageBars(review.toolKinds))}
-    ${reviewSection("模型分布", usageBars(review.models))}
-    ${reviewSection("Skill / MCP 清理候选", cleanupTable(review.cleanupRecommendations))}
+    ${reviewSection("基础统计", statGrid)}
+    <div class="review-columns review-support-grid">
+      ${reviewSection("项目", usageBars(review.projects, 12, "project"))}
+      ${reviewSection("Provider / 模型", usageBars({ ...(review.providers || {}), ...(review.models || {}) }))}
+      ${reviewSection("活跃时段", hourlyBars(review.hourlyStarts))}
+    </div>
+    ${reviewSection("长期未使用", inactiveUsage(review.cleanupRecommendations))}
   `;
+}
+
+function scenarioCards(record) {
+  const entries = rankedEntries(record).filter(([, value]) => value && typeof value === "object");
+  if (!entries.length) return '<div class="review-empty">暂无足够数据识别使用场景。</div>';
+  return `<div class="scenario-grid">${entries.map(([name, value]) => {
+    const tools = rankedEntries(value.tools, 3).map(([label, count]) => `${escapeHtml(usageLabel(label, "tool"))} <strong>${count}</strong>`).join("、") || "暂无工具调用";
+    const skills = rankedEntries(value.skills, 2).map(([label, count]) => `${escapeHtml(usageLabel(label, "skill"))} <strong>${count}</strong>`).join("、");
+    const project = rankedEntries(value.projects, 1)[0]?.[0];
+    const example = value.examples?.[0];
+    return `<article class="scenario-card"><div class="scenario-card-head"><div><span class="scenario-kicker">使用场景</span><h3>${escapeHtml(name)}</h3></div><strong>${value.sessions} 个会话</strong></div><div class="scenario-metrics"><span>${value.toolCalls} 次工具调用</span><span>${value.modelCalls} 次模型调用</span>${project ? `<span>${escapeHtml(project)}</span>` : ""}</div><p><b>常用工具</b> ${tools}</p>${skills ? `<p><b>相关 Skill</b> ${skills}</p>` : ""}${example ? `<blockquote>${escapeHtml(example)}</blockquote>` : ""}</article>`;
+  }).join("")}</div>`;
 }
 
 function hourlyBars(valuesByHour) {
@@ -821,15 +845,33 @@ function reviewSection(title, body) {
   return `<section class="review-section"><h2>${escapeHtml(title)}</h2>${body}</section>`;
 }
 
-function usageBars(record) {
-  const entries = Object.entries(record || {}).sort((a, b) => b[1] - a[1]);
+function usageBars(record, limit = 12, kind = "") {
+  const allEntries = Object.entries(record || {}).sort((a, b) => b[1] - a[1]);
+  const entries = allEntries.slice(0, limit);
   const max = entries[0]?.[1] || 1;
-  return `<div class="usage-bars">${entries.map(([label, count]) => `<div class="usage-bar"><span>${escapeHtml(label)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, count / max * 100)}%"></div></div><strong>${count}</strong></div>`).join("") || "暂无记录"}</div>`;
+  return `<div class="usage-bars">${entries.map(([label, count]) => `<div class="usage-bar"><span title="${escapeHtml(label)}">${escapeHtml(usageLabel(label, kind))}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, count / max * 100)}%"></div></div><strong>${count}</strong></div>`).join("") || "暂无记录"}${allEntries.length > limit ? `<small class="usage-more">另有 ${allEntries.length - limit} 项未展开</small>` : ""}</div>`;
 }
 
-function cleanupTable(items) {
-  if (!items?.length) return "没有达到清理阈值的 Skill 或 MCP。";
-  return `<table class="cleanup-table"><thead><tr><th>类型</th><th>名称</th><th>最后观察</th><th>建议依据</th></tr></thead><tbody>${items.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.id)}</td><td>${escapeHtml(item.lastUsed || "未观察到")}</td><td>${escapeHtml(item.reason)}</td></tr>`).join("")}</tbody></table>`;
+function usageLabel(value, kind = "") {
+  const normalized = String(value).replaceAll("\\", "/");
+  if (kind !== "skill") return value;
+  const marker = normalized.toLowerCase().lastIndexOf("/skills/");
+  return marker >= 0 ? normalized.slice(marker + "/skills/".length) : normalized.split("/").at(-1) || normalized;
+}
+
+function inactiveUsage(items) {
+  if (!items?.length) return '<div class="review-empty">当前没有达到长期未使用阈值的工具、Skill 或 MCP。</div>';
+  const labels = { tool: "工具", skill: "Skill", mcp: "MCP" };
+  const groups = ["tool", "skill", "mcp"].map((type) => [type, items.filter((item) => item.type === type)]).filter(([, entries]) => entries.length);
+  return `<div class="inactive-grid">${groups.map(([type, entries]) => `<section class="inactive-group"><div class="inactive-group-head"><h3>${labels[type]}</h3><span>${entries.length} 项</span></div><ul>${entries.map((item) => `<li><div><strong title="${escapeHtml(item.id)}">${escapeHtml(usageLabel(item.id, type))}</strong><small>${escapeHtml(item.lastUsed ? `最后使用：${item.lastUsed}` : "历史中未观察到")}</small></div><span>${escapeHtml(item.reason)}</span></li>`).join("")}</ul></section>`).join("")}</div>`;
+}
+
+function rankedEntries(record, limit = 12) {
+  return Object.entries(record || {}).sort(([, left], [, right]) => {
+    const leftCount = typeof left === "object" ? left.sessions || 0 : left;
+    const rightCount = typeof right === "object" ? right.sessions || 0 : right;
+    return rightCount - leftCount;
+  }).slice(0, limit);
 }
 
 function formatDuration(milliseconds) {
@@ -842,6 +884,7 @@ async function openSettings() {
     state.settings = await api("/api/settings");
     elements.settingsForm.elements.enabled.checked = state.settings.enabled;
     elements.settingsForm.elements.scheduleTime.value = state.settings.scheduleTime;
+    elements.settingsForm.elements.inactiveToolDays.value = state.settings.inactiveToolDays;
     elements.settingsForm.elements.inactiveSkillDays.value = state.settings.inactiveSkillDays;
     elements.settingsForm.elements.inactiveMcpDays.value = state.settings.inactiveMcpDays;
     elements.settingsForm.elements.retentionDays.value = state.settings.retentionDays;
@@ -861,6 +904,7 @@ async function saveSettings() {
   const payload = {
     enabled: form.enabled.checked,
     scheduleTime: form.scheduleTime.value,
+    inactiveToolDays: Number(form.inactiveToolDays.value),
     inactiveSkillDays: Number(form.inactiveSkillDays.value),
     inactiveMcpDays: Number(form.inactiveMcpDays.value),
     retentionDays: Number(form.retentionDays.value),
