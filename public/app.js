@@ -2,12 +2,18 @@ import { buildTraceTree, findTraceNode, flattenTree, nodeDetails } from "./trace
 
 const state = {
   traces: [], trace: null, traceTree: null, collapsedNodes: new Set(), selectedTraceId: null, selectedRowId: null, view: "tree",
-  reviews: [], selectedReviewDate: null, settings: null, config: null,
+  reviews: [], selectedReviewDate: null, settings: null, config: null, sessionQuery: "", treeQuery: "",
 };
 const elements = {
-  root: document.querySelector("#trace-root"),
   count: document.querySelector("#session-count"),
   sessions: document.querySelector("#sessions-list"),
+  sessionPicker: document.querySelector("#session-picker"),
+  sessionsPopover: document.querySelector("#sessions-popover"),
+  sessionSearch: document.querySelector("#session-search"),
+  activeSessionName: document.querySelector("#active-session-name"),
+  treeSearch: document.querySelector("#tree-search"),
+  expandAll: document.querySelector("#expand-all"),
+  graph: document.querySelector("#graph-canvas"),
   summary: document.querySelector("#trace-summary"),
   timeline: document.querySelector("#timeline-list"),
   details: document.querySelector("#details"),
@@ -57,13 +63,18 @@ function setMode(mode) {
 
 function renderSessions() {
   elements.count.textContent = state.traces.length;
-  elements.sessions.innerHTML = state.traces.map((trace) => `
+  const query = state.sessionQuery.trim().toLowerCase();
+  const traces = state.traces.filter((trace) => !query || `${trace.rolloutId} ${trace.id}`.toLowerCase().includes(query));
+  elements.sessions.innerHTML = traces.map((trace) => `
     <button class="session ${trace.id === state.selectedTraceId ? "active" : ""}" data-trace="${escapeHtml(trace.id)}">
       <span class="session-id">${escapeHtml(trace.rolloutId || trace.id)}</span>
       <span class="session-meta"><span>${new Date(trace.startedAtUnixMs).toLocaleString()}</span><span>${trace.reducedAtUnixMs ? "ready" : "raw"}</span></span>
     </button>`).join("") || '<div class="empty">尚无 trace bundle</div>';
   elements.sessions.querySelectorAll("[data-trace]").forEach((button) => {
-    button.addEventListener("click", () => loadTrace(button.dataset.trace));
+    button.addEventListener("click", () => {
+      elements.sessionsPopover.classList.add("hidden");
+      loadTrace(button.dataset.trace);
+    });
   });
 }
 
@@ -82,13 +93,13 @@ function renderSummary() {
   const metrics = traceMetrics(state.trace);
   elements.summary.classList.remove("empty");
   elements.summary.innerHTML = `
-    <h1>${escapeHtml(state.trace.rollout_id)}</h1>
+    <div class="summary-kicker">TRACE</div><h1>${escapeHtml(state.trace.rollout_id)}</h1>
+    <div class="summary-date">${new Date(state.trace.started_at_unix_ms).toLocaleString()}</div>
     <div class="metrics">
-      <span>Status <strong>${escapeHtml(state.trace.status)}</strong></span>
-      <span>Runtime turns <strong>${metrics.turns}</strong></span>
-      <span>Model calls <strong>${metrics.calls}</strong></span>
-      <span>Tools <strong>${metrics.tools}</strong></span>
-      <span>Tokens <strong>${metrics.usage.input.toLocaleString()} in / ${metrics.usage.output.toLocaleString()} out</strong></span>
+      <span>Latency: <strong>${formatMilliseconds(state.trace.ended_at_unix_ms - state.trace.started_at_unix_ms)}</strong></span>
+      <span>Status: <strong>${escapeHtml(state.trace.status)}</strong></span>
+      <span>${metrics.calls} generations</span><span>${metrics.tools} tools</span>
+      <span>${metrics.usage.input.toLocaleString()} prompt → ${metrics.usage.output.toLocaleString()} completion</span>
     </div>`;
 }
 
@@ -174,7 +185,8 @@ function renderTimeline() {
 }
 
 function renderObservationTree() {
-  const rows = flattenTree(state.traceTree, state.collapsedNodes);
+  const query = state.treeQuery.trim().toLowerCase();
+  const rows = flattenTree(state.traceTree, state.collapsedNodes).filter(({ node }) => !query || `${node.title} ${node.type}`.toLowerCase().includes(query));
   elements.timeline.innerHTML = `<div class="observation-header"><span>Observation</span><span>Duration</span></div>${rows.map(({ node, depth }) => observationRow(node, depth)).join("")}`;
   wireObservationRows();
 }
@@ -218,6 +230,17 @@ function renderWaterfall() {
   elements.timeline.querySelectorAll("[data-node]").forEach((row) => row.addEventListener("click", () => selectTraceNode(row.dataset.node)));
 }
 
+function renderGraph() {
+  if (!state.traceTree) return;
+  const rows = flattenTree(state.traceTree, new Set()).slice(0, 24);
+  elements.graph.classList.remove("empty");
+  elements.graph.innerHTML = `<div class="graph-flow">${rows.map(({ node, depth }, index) => `
+    <button class="graph-node ${escapeHtml(node.type)} ${node.id === state.selectedRowId ? "active" : ""}" data-node="${escapeHtml(node.id)}" style="--depth:${depth}">
+      <span>${escapeHtml(node.title)}</span><small>${formatNodeDuration(node)}</small>
+    </button>${index < rows.length - 1 ? '<i class="graph-line"></i>' : ""}`).join("")}</div>`;
+  elements.graph.querySelectorAll("[data-node]").forEach((button) => button.addEventListener("click", () => selectTraceNode(button.dataset.node)));
+}
+
 function nodeTypeLabel(type) {
   return ({ trace: "TRACE", turn: "TURN", generation: "GENERATION", tool: "SPAN · TOOL", code: "SPAN · CODE", compaction: "SPAN · COMPACTION" })[type] || type.toUpperCase();
 }
@@ -250,6 +273,7 @@ function selectRow(id) {
   }
   state.selectedRowId = id;
   renderTimeline();
+  renderGraph();
   const row = currentRows().find((candidate) => candidate.id === id);
   if (!row) return;
   const data = row.data;
@@ -281,6 +305,12 @@ async function selectTraceNode(id) {
   elements.details.innerHTML = renderNodeDetail(detail);
   elements.detailsPane.classList.add("open");
   elements.details.querySelectorAll("[data-payload]").forEach((button) => button.addEventListener("click", () => loadNodePayload(button.dataset.payload, button.dataset.label)));
+  elements.details.querySelectorAll("[data-detail-view]").forEach((button) => button.addEventListener("click", () => {
+    const view = button.dataset.detailView;
+    elements.details.querySelectorAll("[data-detail-view]").forEach((item) => item.classList.toggle("active", item === button));
+    elements.details.querySelector(".detail-preview").classList.toggle("hidden", view !== "preview");
+    elements.details.querySelector(".detail-json").classList.toggle("hidden", view !== "json");
+  }));
 }
 
 function renderNodeDetail(detail) {
@@ -289,15 +319,16 @@ function renderNodeDetail(detail) {
       <div><span class="detail-kind"><span class="node-type ${escapeHtml(detail.type)}"></span>${escapeHtml(nodeTypeLabel(detail.type))}</span><h2>${escapeHtml(detail.title)}</h2></div>
       <span class="badge ${escapeHtml(detail.status)}">${escapeHtml(detail.status)}</span>
     </div>
-    <dl class="kv detail-metadata">
+    <div class="detail-tabs"><button class="active" data-detail-view="preview">Preview</button><button data-detail-view="json">JSON</button></div>
+    <div class="detail-preview"><dl class="kv detail-metadata">
       <dt>Started</dt><dd>${detail.startedAt ? new Date(detail.startedAt).toLocaleString() : "-"}</dd>
       <dt>Duration</dt><dd>${formatNodeDuration({ start: detail.startedAt, end: detail.endedAt })}</dd>
       ${metadata.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
     </dl>
     ${ioSection("Input", detail.input)}
     ${ioSection("Output", detail.output)}
-    ${detail.payloads.length ? `<section class="io-section"><div class="io-title">Raw payloads</div><div>${detail.payloads.map((payload) => `<button class="payload-button" data-payload="${escapeHtml(payload.id)}" data-label="${escapeHtml(payload.label)}">${escapeHtml(payload.label)}</button>`).join("")}</div><pre id="node-payload-preview">选择 payload 查看完整原始数据</pre></section>` : ""}
-    <details class="raw-object"><summary>Reduced object</summary><pre>${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre></details>`;
+    ${detail.payloads.length ? `<section class="io-section"><div class="io-title">Raw payloads</div><div>${detail.payloads.map((payload) => `<button class="payload-button" data-payload="${escapeHtml(payload.id)}" data-label="${escapeHtml(payload.label)}">${escapeHtml(payload.label)}</button>`).join("")}</div><pre id="node-payload-preview">选择 payload 查看完整原始数据</pre></section>` : ""}</div>
+    <div class="detail-json hidden"><pre>${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre></div>`;
 }
 
 function ioSection(title, value) {
@@ -346,8 +377,10 @@ async function loadTrace(id, reduce = true) {
   state.traceTree = buildTraceTree(state.trace);
   state.collapsedNodes = new Set();
   state.selectedRowId = state.traceTree.id;
+  elements.activeSessionName.textContent = state.trace.rollout_id || id;
   renderSummary();
   renderTimeline();
+  renderGraph();
   await selectTraceNode(state.traceTree.id);
 }
 
@@ -355,7 +388,6 @@ async function refresh() {
   try {
     const [config, result] = await Promise.all([api("/api/config"), api("/api/traces")]);
     state.config = config;
-    elements.root.textContent = config.traceRoot;
     state.traces = result.traces;
     renderSessions();
     if (!state.selectedTraceId && state.traces[0]) await loadTrace(state.traces[0].id);
@@ -489,6 +521,13 @@ document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click",
   state.selectedRowId = null;
   renderTimeline();
 }));
+elements.sessionPicker.addEventListener("click", () => elements.sessionsPopover.classList.toggle("hidden"));
+elements.sessionSearch.addEventListener("input", () => { state.sessionQuery = elements.sessionSearch.value; renderSessions(); });
+elements.treeSearch.addEventListener("input", () => { state.treeQuery = elements.treeSearch.value; renderTimeline(); });
+elements.expandAll.addEventListener("click", () => { state.collapsedNodes.clear(); renderTimeline(); });
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".session-picker-wrap")) elements.sessionsPopover.classList.add("hidden");
+});
 elements.refresh.addEventListener("click", refresh);
 document.querySelectorAll(".mode").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 elements.settingsButton.addEventListener("click", openSettings);

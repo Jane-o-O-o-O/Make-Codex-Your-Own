@@ -8,36 +8,33 @@
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <strong>Codex Trace Viewer</strong>
-        <span id="trace-root"></span>
+      <div class="brand"><span class="brand-mark">C</span><strong>Trace</strong></div>
+      <div class="session-picker-wrap">
+        <button id="session-picker" class="session-picker" type="button"><span id="active-session-name">Select session</span><span>⌄</span></button>
+        <div id="sessions-popover" class="sessions-popover hidden">
+          <div class="session-search"><span>⌕</span><input id="session-search" type="search" placeholder="Search sessions" /></div>
+          <div class="session-count-row">Sessions <span id="session-count">0</span></div>
+          <div id="sessions-list" class="sessions-list"></div>
+        </div>
       </div>
       <nav class="mode-switch">
         <button class="mode active" data-mode="traces">Traces</button>
         <button class="mode" data-mode="reviews">Daily Reviews</button>
       </nav>
-      <div class="toolbar">
-        <label><input id="auto-refresh" type="checkbox" checked /> 实时刷新</label>
-        <button id="settings-button" title="设置">⚙</button>
-        <button id="refresh" title="刷新">↻</button>
-      </div>
+      <div class="toolbar"><label class="sr-only"><input id="auto-refresh" type="checkbox" checked /> Auto refresh</label><button id="settings-button" title="Settings">⚙</button><button id="refresh" title="Refresh">↻</button></div>
     </header>
     <main id="trace-workspace" class="workspace">
-      <aside class="sessions pane">
-        <div class="pane-title">Sessions <span id="session-count">0</span></div>
-        <div id="sessions-list" class="sessions-list"></div>
-      </aside>
-      <section class="timeline pane">
-        <div id="trace-summary" class="trace-summary empty">选择一个 session</div>
+      <section class="timeline pane trace-navigation">
+        <div class="trace-tools"><div class="tree-search"><span>⌕</span><input id="tree-search" type="search" placeholder="Search observations" /></div><button id="expand-all" title="Expand all">↕</button></div>
         <div class="tabs" role="tablist">
           <button class="tab active" data-view="tree">Tree</button>
           <button class="tab" data-view="timeline">Timeline</button>
-          <button class="tab" data-view="conversation">Conversation</button>
         </div>
         <div id="timeline-list" class="timeline-list"></div>
+        <section class="trace-graph"><div class="graph-title">Graph <button id="graph-fit" title="Fit graph">⌗</button></div><div id="graph-canvas" class="graph-canvas empty">Select a session</div></section>
       </section>
       <aside class="details pane">
-        <div class="pane-title">Details</div>
+        <div id="trace-summary" class="trace-summary empty">Select a session</div>
         <div id="details" class="details-content empty">选择一条记录查看详情</div>
       </aside>
     </main>
