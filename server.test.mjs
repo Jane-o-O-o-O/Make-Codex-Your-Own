@@ -40,7 +40,7 @@ test("parseArgs rejects invalid ports and unknown arguments", () => {
 
 test("viewer serves trace state and referenced payloads", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "codex-viewer-"));
-  const server = createViewerServer({ traceRoot: fixtureRoot, dataRoot, codexHome: dataRoot, codex: "codex" });
+  const server = createViewerServer({ traceRoot: fixtureRoot, dataRoot, codexHome: dataRoot, codex: path.join(dataRoot, "missing-codex") });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(() => server.close());
   context.after(() => rm(dataRoot, { recursive: true, force: true }));
@@ -49,9 +49,17 @@ test("viewer serves trace state and referenced payloads", async (context) => {
 
   const traces = await fetch(`${base}/api/traces`).then((response) => response.json());
   assert.equal(traces.traces[0].rolloutId, "rollout-sample");
+  assert.equal(traces.traces[0].status, "completed");
+  assert.deepEqual(traces.traces[0].models, ["gpt-5"]);
+  assert.equal(traces.traces[0].tools, 1);
+  assert.equal(traces.traces[0].inputTokens, 1420);
+  assert.equal(traces.traces[0].firstUserMessage, "检查项目并总结关键风险");
 
   const trace = await fetch(`${base}/api/traces/sample`).then((response) => response.json());
   assert.equal(trace.inference_calls["inference-1"].usage.input_tokens, 1420);
+
+  const readyTrace = await fetch(`${base}/api/traces/sample?reduce=1`);
+  assert.equal(readyTrace.status, 200);
 
   const payload = await fetch(`${base}/api/traces/sample/payloads/payload-request`).then((response) => response.json());
   assert.equal(payload.model, "gpt-5");

@@ -91,12 +91,23 @@ async function discoverBundles(traceRoot) {
       const manifest = await readJson(manifestPath);
       const statePath = path.join(bundleDir, "state.json");
       const stateInfo = (await exists(statePath)) ? await stat(statePath) : null;
+      const summary = stateInfo ? await summarizeState(statePath) : null;
       bundles.push({
         id: entry.name,
         traceId: manifest.trace_id,
         rolloutId: manifest.rollout_id,
         rootThreadId: manifest.root_thread_id,
         startedAtUnixMs: manifest.started_at_unix_ms,
+        endedAtUnixMs: summary?.endedAtUnixMs ?? null,
+        status: stateInfo ? (summary?.status || "corrupt") : "raw",
+        durationMs: summary?.durationMs ?? null,
+        firstUserMessage: summary?.firstUserMessage || "",
+        models: summary?.models || [],
+        tools: summary?.tools ?? 0,
+        inputTokens: summary?.inputTokens ?? 0,
+        outputTokens: summary?.outputTokens ?? 0,
+        reasoningTokens: summary?.reasoningTokens ?? 0,
+        project: summary?.project || "",
         reducedAtUnixMs: stateInfo?.mtimeMs ?? null,
       });
     } catch {
@@ -104,6 +115,60 @@ async function discoverBundles(traceRoot) {
     }
   }
   return bundles.sort((a, b) => b.startedAtUnixMs - a.startedAtUnixMs);
+}
+
+async function summarizeState(statePath) {
+  try {
+    const state = await readJson(statePath);
+    const calls = Object.values(state.inference_calls || {});
+    const usage = calls.reduce((totals, call) => {
+      totals.inputTokens += call.usage?.input_tokens || 0;
+      totals.outputTokens += call.usage?.output_tokens || 0;
+      totals.reasoningTokens += call.usage?.reasoning_output_tokens || 0;
+      return totals;
+    }, { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
+    const users = Object.values(state.conversation_items || {})
+      .filter((item) => item.role === "user")
+      .sort((left, right) => (left.first_seen_at_unix_ms || 0) - (right.first_seen_at_unix_ms || 0));
+    const userMessages = users.map(summarizeItem).filter(Boolean);
+    const firstUserMessage = userMessages.find((message) => !message.startsWith("<environment_context>") && !message.startsWith("<system>") && !message.startsWith("# AGENTS")) || userMessages[0] || "";
+    const startedAtUnixMs = state.started_at_unix_ms;
+    const endedAtUnixMs = state.ended_at_unix_ms;
+    const project = await stateProject(state, path.dirname(statePath));
+    return {
+      status: state.status || "unknown",
+      endedAtUnixMs: endedAtUnixMs ?? null,
+      durationMs: endedAtUnixMs == null ? null : Math.max(0, endedAtUnixMs - startedAtUnixMs),
+      firstUserMessage,
+      models: [...new Set(calls.map((call) => call.model).filter(Boolean))],
+      tools: Object.keys(state.tool_calls || {}).length,
+      ...usage,
+      project: project || state.project || state.cwd || state.root_thread?.cwd || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function stateProject(state, bundleDir) {
+  const reference = Object.values(state.raw_payloads || {}).find((item) => item.kind?.type === "session_metadata");
+  if (!reference?.path) return "";
+  try {
+    const payload = await readJson(safeChild(bundleDir, reference.path));
+    return payload.cwd || payload.config?.cwd || "";
+  } catch {
+    return "";
+  }
+}
+
+function summarizeItem(item) {
+  const text = (item.body?.parts || [])
+    .map((part) => part.text || part.summary || part.source || part.value || "")
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > 180 ? `${text.slice(0, 179)}…` : text;
 }
 
 async function readBody(request) {
@@ -216,7 +281,14 @@ export function createViewerServer(options) {
     try {
       const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
       if (url.pathname === "/api/config") {
-        json(response, 200, { traceRoot: options.traceRoot, dataRoot: options.dataRoot, codexHome: options.codexHome });
+        json(response, 200, {
+          traceRoot: options.traceRoot,
+          dataRoot: options.dataRoot,
+          codexHome: options.codexHome,
+          codexExecutable: options.codex,
+          traceCaptureEnabled: Boolean(process.env.CODEX_ROLLOUT_TRACE_ROOT),
+          refreshedAtUnixMs: Date.now(),
+        });
         return;
       }
       if (url.pathname === "/api/settings") {
@@ -259,7 +331,11 @@ export function createViewerServer(options) {
         const id = decodeURIComponent(stateMatch[1]);
         const bundleDir = safeChild(options.traceRoot, id);
         const statePath = path.join(bundleDir, "state.json");
-        if (url.searchParams.get("reduce") === "1") {
+        if (!(await exists(bundleDir))) {
+          json(response, 404, { error: "trace bundle not found" });
+          return;
+        }
+        if (url.searchParams.get("reduce") === "1" && !(await exists(statePath))) {
           let pending = reducing.get(bundleDir);
           if (!pending) {
             pending = runReducer(options.codex, bundleDir).finally(() => reducing.delete(bundleDir));

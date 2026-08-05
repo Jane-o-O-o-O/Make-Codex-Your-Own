@@ -184,7 +184,7 @@ function traceTitle(trace) {
 }
 
 function turnTitle(trace, turn) {
-  const text = (turn.input_item_ids || []).map((id) => itemText(trace.conversation_items?.[id])).filter(Boolean).join(" ");
+  const text = (turn.input_item_ids || []).map((id) => itemText(trace.conversation_items?.[id])).filter(isUserFacingText).join(" ");
   return text ? truncate(text, 72) : "Codex turn";
 }
 
@@ -201,7 +201,12 @@ function toolSummary(tool, side) {
 
 function firstUserItems(trace) {
   const users = Object.values(trace.conversation_items || {}).filter((item) => item.role === "user").sort((a, b) => a.first_seen_at_unix_ms - b.first_seen_at_unix_ms);
-  return users.slice(0, 1).map((item) => item.item_id);
+  const preferred = users.find((item) => isUserFacingText(itemText(item)));
+  return [preferred || users[0]].filter(Boolean).map((item) => item.item_id);
+}
+
+function isUserFacingText(value) {
+  return Boolean(value) && !value.startsWith("<environment_context>") && !value.startsWith("<system>") && !value.startsWith("# AGENTS");
 }
 
 function finalAssistantItems(trace) {

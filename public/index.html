@@ -9,40 +9,46 @@
   <body>
     <header class="topbar">
       <div class="brand"><span class="brand-mark">C</span><strong>Trace</strong></div>
-      <nav id="breadcrumb" class="breadcrumb"><button data-route="days">Days</button><span>/</span><button id="breadcrumb-day" class="hidden"></button><span id="breadcrumb-session-separator" class="hidden">/</span><strong id="active-session-name" class="hidden"></strong></nav>
-      <nav class="mode-switch">
-        <button class="mode active" data-mode="traces">Traces</button>
-        <button class="mode" data-mode="reviews">Daily Reviews</button>
+      <nav id="breadcrumb" class="breadcrumb"><button data-route="days">日期</button><span>/</span><button id="breadcrumb-day" class="hidden"></button><span id="breadcrumb-session-separator" class="hidden">/</span><strong id="active-session-name" class="hidden"></strong></nav>
+      <nav class="mode-switch" aria-label="主导航">
+        <button class="mode active" data-mode="traces">会话</button>
+        <button class="mode" data-mode="reviews">每日复盘</button>
+        <button class="mode" data-mode="settings">设置</button>
       </nav>
-      <div class="toolbar"><label class="sr-only"><input id="auto-refresh" type="checkbox" checked /> Auto refresh</label><button id="settings-button" title="Settings">⚙</button><button id="refresh" title="Refresh">↻</button></div>
+      <div id="global-status" class="global-status" aria-live="polite"><span class="status-dot"></span><span id="capture-status">检查采集状态…</span><small id="last-refresh">尚未刷新</small></div>
+      <div class="toolbar"><label class="refresh-control"><input id="auto-refresh" type="checkbox" checked /> 自动刷新</label><select id="refresh-interval" title="刷新周期"><option value="10000">10 秒</option><option value="30000" selected>30 秒</option><option value="60000">1 分钟</option><option value="0">关闭</option></select><button id="settings-button" title="设置">⚙</button><button id="refresh" title="立即刷新">↻</button></div>
     </header>
     <main id="day-browser" class="browser-page">
-      <div class="browser-header"><div><span class="eyebrow">OBSERVABILITY</span><h1>Codex activity</h1><p>Browse local traces by day.</p></div><div class="browser-total"><strong id="day-count">0</strong><span>active days</span></div></div>
+      <div class="browser-header"><div><span class="eyebrow">本地可观测性</span><h1>Codex 活动</h1><p>按日期浏览本地会话与使用情况。</p></div><div class="browser-total"><strong id="day-count">0</strong><span>个活跃日</span></div></div>
       <div id="days-list" class="days-list"></div>
     </main>
     <main id="session-browser" class="browser-page hidden">
-      <div class="browser-header"><div><button id="back-to-days" class="back-button">← Days</button><h1 id="sessions-day-title">Sessions</h1><p>Select a session to inspect its trace.</p></div><div class="browser-total"><strong id="session-count">0</strong><span>sessions</span></div></div>
-      <div class="session-search standalone"><span>⌕</span><input id="session-search" type="search" placeholder="Search sessions" /></div>
+      <div class="browser-header"><div><button id="back-to-days" class="back-button">← 日期</button><h1 id="sessions-day-title">会话</h1><p>选择一次会话查看完整轨迹。</p></div><div class="browser-total"><strong id="session-count">0</strong><span>个会话</span></div></div>
+      <div class="list-controls"><div class="session-search standalone"><span>⌕</span><input id="session-search" type="search" placeholder="搜索指令、Rollout ID、项目或模型" /></div><select id="session-status-filter" title="状态筛选"><option value="all">全部状态</option><option value="completed">已完成</option><option value="running">运行中</option><option value="failed">失败</option><option value="raw">待归约</option></select><select id="session-model-filter" title="模型筛选"><option value="all">全部模型</option></select></div>
+      <div class="session-table-head"><span>会话</span><span>状态</span><span>模型</span><span>节点</span><span>Token</span><span>耗时</span><span></span></div>
       <div id="sessions-list" class="session-table"></div>
     </main>
     <main id="trace-workspace" class="workspace hidden">
+      <div id="mobile-view-tabs" class="mobile-view-tabs" role="tablist" aria-label="移动端视图"><button data-mobile-view="tree">树</button><button data-mobile-view="timeline">时间线</button><button data-mobile-view="graph">关系图</button><button data-mobile-view="details">详情</button></div>
       <section class="timeline pane trace-navigation">
-        <div class="trace-tools"><div class="tree-search"><span>⌕</span><input id="tree-search" type="search" placeholder="Search observations" /></div><button id="expand-all" title="Expand all">↕</button></div>
-        <div class="tabs" role="tablist">
-          <button class="tab active" data-view="tree">Tree</button>
-          <button class="tab" data-view="timeline">Timeline</button>
+        <div class="trace-tools"><div class="tree-search"><span>⌕</span><input id="tree-search" type="search" placeholder="搜索观察节点" /></div><button id="expand-all" title="展开全部">↕</button></div>
+        <div class="tabs" role="tablist" aria-label="Trace 视图">
+          <button class="tab active" data-view="tree">树</button>
+          <button class="tab" data-view="timeline">时间线</button>
+          <button class="tab" data-view="graph">关系图</button>
+          <button class="tab" data-view="conversation">对话</button>
         </div>
         <div id="timeline-list" class="timeline-list"></div>
-        <section class="trace-graph"><div class="graph-title">Graph <button id="graph-fit" title="Fit graph">⌗</button></div><div id="graph-canvas" class="graph-canvas empty">Select a session</div></section>
+        <section class="trace-graph"><div class="graph-title">关系图 <button id="graph-fit" title="适配关系图">⌗</button></div><div id="graph-canvas" class="graph-canvas empty">选择一个会话</div></section>
       </section>
       <aside class="details pane">
-        <div id="trace-summary" class="trace-summary empty">Select a session</div>
+        <div id="trace-summary" class="trace-summary empty">选择一个会话</div>
         <div id="details" class="details-content empty">选择一条记录查看详情</div>
       </aside>
     </main>
     <main id="reviews-workspace" class="reviews-workspace hidden">
       <aside class="review-days pane">
-        <div class="pane-title">Daily Reviews <span id="review-count">0</span></div>
+        <div class="pane-title">每日复盘 <span id="review-count">0</span></div>
         <div id="review-list" class="sessions-list"></div>
       </aside>
       <section class="review-dashboard pane">
@@ -52,16 +58,14 @@
     </main>
     <dialog id="settings-dialog">
       <form id="settings-form" method="dialog">
-        <div class="dialog-title"><strong>Daily Review Settings</strong><button value="cancel" title="关闭">×</button></div>
-        <label class="field"><span>启用每日复盘</span><input name="enabled" type="checkbox" /></label>
-        <label class="field"><span>每日运行时间</span><input name="scheduleTime" type="time" required /></label>
-        <label class="field"><span>Skill 未使用阈值（天）</span><input name="inactiveSkillDays" type="number" min="1" max="3650" /></label>
-        <label class="field"><span>MCP 未使用阈值（天）</span><input name="inactiveMcpDays" type="number" min="1" max="3650" /></label>
-        <label class="field"><span>日报保留天数</span><input name="retentionDays" type="number" min="1" max="3650" /></label>
-        <div class="repository-path">日报仓库：<code id="data-root"></code></div>
-        <div id="settings-error" class="form-error"></div>
+        <div class="dialog-title"><strong>监测与复盘设置</strong><button value="cancel" title="关闭">×</button></div>
+        <div class="settings-group"><h3>采集设置</h3><p>Trace 只写入本机目录，不会发送到 Langfuse 或其他服务。</p><div class="repository-path">Trace 根目录：<code id="trace-root-setting"></code><br />Codex CLI：<code id="codex-executable"></code></div></div>
+        <div class="settings-group"><h3>每日复盘</h3><label class="field"><span>启用每日复盘</span><input name="enabled" type="checkbox" /></label><label class="field"><span>每日运行时间</span><input name="scheduleTime" type="time" required /></label></div>
+        <div class="settings-group"><h3>数据保留与建议</h3><label class="field"><span>Skill 未使用阈值（天）</span><input name="inactiveSkillDays" type="number" min="1" max="3650" /></label><label class="field"><span>MCP 未使用阈值（天）</span><input name="inactiveMcpDays" type="number" min="1" max="3650" /></label><label class="field"><span>日报保留天数</span><input name="retentionDays" type="number" min="1" max="3650" /></label></div>
+        <div class="repository-path">日报仓库：<code id="data-root"></code><br />敏感内容可能包含提示词、源码、路径和命令输出。</div>
+        <div id="settings-error" class="form-error" role="alert"></div><div id="settings-saved" class="settings-saved" role="status"></div>
         <div class="dialog-actions">
-          <button id="run-review" type="button">立即复盘今天</button>
+          <button id="run-review" type="button">立即生成今日复盘</button>
           <button class="primary" value="save">保存设置</button>
         </div>
       </form>
