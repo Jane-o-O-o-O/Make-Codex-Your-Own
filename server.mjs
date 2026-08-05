@@ -1,0 +1,327 @@
+import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
+import { access, readFile, readdir, stat } from "node:fs/promises";
+import { createServer } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  buildDailyReview,
+  collectInventory,
+  listReviews,
+  loadSettings,
+  localDate,
+  pruneReviews,
+  saveSettings,
+  shouldRunScheduledReview,
+  storeReview,
+  validateSettings,
+} from "./insights.mjs";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const publicRoot = path.join(here, "public");
+const contentTypes = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+};
+
+export function parseArgs(argv) {
+  const options = {
+    traceRoot: process.env.CODEX_ROLLOUT_TRACE_ROOT || path.join(process.cwd(), "traces"),
+    host: "127.0.0.1",
+    port: 4319,
+    codex: process.env.CODEX_TRACE_VIEWER_CODEX || "codex",
+    dataRoot: process.env.CODEX_INSIGHTS_ROOT || path.resolve(process.cwd(), ".codex-insights"),
+    codexHome: process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--trace-root") options.traceRoot = argv[++index];
+    else if (value === "--host") options.host = argv[++index];
+    else if (value === "--port") options.port = Number(argv[++index]);
+    else if (value === "--codex") options.codex = argv[++index];
+    else if (value === "--data-root") options.dataRoot = argv[++index];
+    else if (value === "--codex-home") options.codexHome = argv[++index];
+    else throw new Error(`unknown argument: ${value}`);
+  }
+  if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) {
+    throw new Error("--port must be an integer from 1 to 65535");
+  }
+  options.traceRoot = path.resolve(options.traceRoot);
+  options.dataRoot = path.resolve(options.dataRoot);
+  options.codexHome = path.resolve(options.codexHome);
+  return options;
+}
+
+export function safeChild(root, child) {
+  const resolved = path.resolve(root, child);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("path escapes trace root");
+  }
+  return resolved;
+}
+
+async function readJson(file) {
+  return JSON.parse(await readFile(file, "utf8"));
+}
+
+async function exists(file) {
+  try {
+    await access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function discoverBundles(traceRoot) {
+  if (!(await exists(traceRoot))) return [];
+  const entries = await readdir(traceRoot, { withFileTypes: true });
+  const bundles = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const bundleDir = safeChild(traceRoot, entry.name);
+    const manifestPath = path.join(bundleDir, "manifest.json");
+    if (!(await exists(manifestPath))) continue;
+    try {
+      const manifest = await readJson(manifestPath);
+      const statePath = path.join(bundleDir, "state.json");
+      const stateInfo = (await exists(statePath)) ? await stat(statePath) : null;
+      bundles.push({
+        id: entry.name,
+        traceId: manifest.trace_id,
+        rolloutId: manifest.rollout_id,
+        rootThreadId: manifest.root_thread_id,
+        startedAtUnixMs: manifest.started_at_unix_ms,
+        reducedAtUnixMs: stateInfo?.mtimeMs ?? null,
+      });
+    } catch {
+      // A writer may be between its atomic filesystem operations. Retry next poll.
+    }
+  }
+  return bundles.sort((a, b) => b.startedAtUnixMs - a.startedAtUnixMs);
+}
+
+async function readBody(request) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > 65_536) throw new Error("request body exceeds 64 KiB");
+    chunks.push(chunk);
+  }
+  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+}
+
+function runReducer(codex, bundleDir) {
+  return new Promise((resolve, reject) => {
+    const args = ["debug", "trace-reduce", bundleDir];
+    const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : codex;
+    const executableArgs = process.platform === "win32"
+      ? ["/d", "/c", codex, ...args]
+      : args;
+    const child = spawn(executable, executableArgs, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      if (stderr.length > 8_192) stderr = stderr.slice(-8_192);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `trace reducer exited with code ${code}`));
+    });
+  });
+}
+
+function json(response, status, body) {
+  response.writeHead(status, {
+    "content-type": contentTypes[".json"],
+    "cache-control": "no-store",
+  });
+  response.end(JSON.stringify(body));
+}
+
+async function serveStatic(response, pathname) {
+  const relative = pathname === "/" ? "index.html" : pathname.slice(1);
+  let file;
+  try {
+    file = safeChild(publicRoot, relative);
+  } catch {
+    json(response, 404, { error: "not found" });
+    return;
+  }
+  if (!(await exists(file)) || !(await stat(file)).isFile()) {
+    json(response, 404, { error: "not found" });
+    return;
+  }
+  response.writeHead(200, {
+    "content-type": contentTypes[path.extname(file)] || "application/octet-stream",
+    "cache-control": "no-cache",
+  });
+  createReadStream(file).pipe(response);
+}
+
+export function createViewerServer(options) {
+  options = {
+    dataRoot: path.join(here, ".codex-insights"),
+    codexHome: process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
+    ...options,
+  };
+  const reducing = new Map();
+  let settingsPromise = loadSettings(options.dataRoot);
+
+  async function reduceBundle(bundle) {
+    const bundleDir = safeChild(options.traceRoot, bundle.id);
+    let pending = reducing.get(bundleDir);
+    if (!pending) {
+      pending = runReducer(options.codex, bundleDir).finally(() => reducing.delete(bundleDir));
+      reducing.set(bundleDir, pending);
+    }
+    await pending;
+    const trace = await readJson(path.join(bundleDir, "state.json"));
+    Object.defineProperty(trace, "__bundleId", { value: bundle.id, enumerable: false });
+    return trace;
+  }
+
+  async function runDailyReview(date = localDate(), markScheduled = false) {
+    const bundles = await discoverBundles(options.traceRoot);
+    const dayBundles = bundles.filter((bundle) => localDate(bundle.startedAtUnixMs) === date);
+    const traces = [];
+    for (const bundle of dayBundles) traces.push(await reduceBundle(bundle));
+    const [inventory, storedReviews] = await Promise.all([
+      collectInventory(options.codexHome),
+      listReviews(options.dataRoot),
+    ]);
+    const previousReviews = storedReviews.filter((review) => review.date !== date);
+    const settings = await settingsPromise;
+    const report = await buildDailyReview({ date, traces, inventory, previousReviews, bundleRoot: options.traceRoot, settings });
+    await storeReview(report, options.dataRoot);
+    await pruneReviews(options.dataRoot, settings.retentionDays);
+    if (markScheduled) {
+      settings.lastScheduledRunDate = date;
+      await saveSettings(settings);
+    }
+    return report;
+  }
+
+  const server = createServer(async (request, response) => {
+    try {
+      const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+      if (url.pathname === "/api/config") {
+        json(response, 200, { traceRoot: options.traceRoot, dataRoot: options.dataRoot, codexHome: options.codexHome });
+        return;
+      }
+      if (url.pathname === "/api/settings") {
+        const settings = await settingsPromise;
+        if (request.method === "PUT") {
+          const updated = validateSettings(await readBody(request), settings);
+          await saveSettings(updated);
+          settingsPromise = Promise.resolve(updated);
+          json(response, 200, updated);
+        } else {
+          json(response, 200, settings);
+        }
+        return;
+      }
+      if (url.pathname === "/api/inventory") {
+        json(response, 200, await collectInventory(options.codexHome));
+        return;
+      }
+      if (url.pathname === "/api/reviews") {
+        json(response, 200, { reviews: await listReviews(options.dataRoot) });
+        return;
+      }
+      if (url.pathname === "/api/reviews/run" && request.method === "POST") {
+        json(response, 200, await runDailyReview(url.searchParams.get("date") || localDate()));
+        return;
+      }
+      const reviewMatch = url.pathname.match(/^\/api\/reviews\/(\d{4}-\d{2}-\d{2})$/);
+      if (reviewMatch) {
+        const reviews = await listReviews(options.dataRoot);
+        const review = reviews.find((item) => item.date === reviewMatch[1]);
+        json(response, review ? 200 : 404, review || { error: "review not found" });
+        return;
+      }
+      if (url.pathname === "/api/traces") {
+        json(response, 200, { traces: await discoverBundles(options.traceRoot) });
+        return;
+      }
+      const stateMatch = url.pathname.match(/^\/api\/traces\/([^/]+)$/);
+      if (stateMatch) {
+        const id = decodeURIComponent(stateMatch[1]);
+        const bundleDir = safeChild(options.traceRoot, id);
+        const statePath = path.join(bundleDir, "state.json");
+        if (url.searchParams.get("reduce") === "1") {
+          let pending = reducing.get(bundleDir);
+          if (!pending) {
+            pending = runReducer(options.codex, bundleDir).finally(() => reducing.delete(bundleDir));
+            reducing.set(bundleDir, pending);
+          }
+          await pending;
+        }
+        if (!(await exists(statePath))) {
+          json(response, 409, { error: "state.json is missing", canReduce: true });
+          return;
+        }
+        json(response, 200, await readJson(statePath));
+        return;
+      }
+      const payloadMatch = url.pathname.match(/^\/api\/traces\/([^/]+)\/payloads\/([^/]+)$/);
+      if (payloadMatch) {
+        const id = decodeURIComponent(payloadMatch[1]);
+        const payloadId = decodeURIComponent(payloadMatch[2]);
+        const bundleDir = safeChild(options.traceRoot, id);
+        const state = await readJson(path.join(bundleDir, "state.json"));
+        const reference = state.raw_payloads?.[payloadId];
+        if (!reference?.path) {
+          json(response, 404, { error: "payload not found" });
+          return;
+        }
+        const payloadFile = safeChild(bundleDir, reference.path);
+        response.writeHead(200, {
+          "content-type": contentTypes[".json"],
+          "cache-control": "no-store",
+        });
+        createReadStream(payloadFile).pipe(response);
+        return;
+      }
+      await serveStatic(response, url.pathname);
+    } catch (error) {
+      json(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+  const scheduler = setInterval(async () => {
+    try {
+      const settings = await settingsPromise;
+      if (shouldRunScheduledReview(settings)) await runDailyReview(localDate(), true);
+    } catch (error) {
+      console.error(`daily review failed: ${error instanceof Error ? error.message : error}`);
+    }
+  }, 30_000);
+  scheduler.unref();
+  server.on("close", () => clearInterval(scheduler));
+  return server;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    const options = parseArgs(process.argv.slice(2));
+    const server = createViewerServer(options);
+    server.listen(options.port, options.host, () => {
+      console.log(`Codex Trace Viewer: http://${options.host}:${options.port}`);
+      console.log(`Trace root: ${options.traceRoot}`);
+      console.log(`Insights repository: ${options.dataRoot}`);
+    });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  }
+}

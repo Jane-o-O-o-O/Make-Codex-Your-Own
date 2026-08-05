@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Trace Viewer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <strong>Codex Trace Viewer</strong>
+        <span id="trace-root"></span>
+      </div>
+      <nav class="mode-switch">
+        <button class="mode active" data-mode="traces">Traces</button>
+        <button class="mode" data-mode="reviews">Daily Reviews</button>
+      </nav>
+      <div class="toolbar">
+        <label><input id="auto-refresh" type="checkbox" checked /> 实时刷新</label>
+        <button id="settings-button" title="设置">⚙</button>
+        <button id="refresh" title="刷新">↻</button>
+      </div>
+    </header>
+    <main id="trace-workspace" class="workspace">
+      <aside class="sessions pane">
+        <div class="pane-title">Sessions <span id="session-count">0</span></div>
+        <div id="sessions-list" class="sessions-list"></div>
+      </aside>
+      <section class="timeline pane">
+        <div id="trace-summary" class="trace-summary empty">选择一个 session</div>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-view="tree">Tree</button>
+          <button class="tab" data-view="timeline">Timeline</button>
+          <button class="tab" data-view="conversation">Conversation</button>
+        </div>
+        <div id="timeline-list" class="timeline-list"></div>
+      </section>
+      <aside class="details pane">
+        <div class="pane-title">Details</div>
+        <div id="details" class="details-content empty">选择一条记录查看详情</div>
+      </aside>
+    </main>
+    <main id="reviews-workspace" class="reviews-workspace hidden">
+      <aside class="review-days pane">
+        <div class="pane-title">Daily Reviews <span id="review-count">0</span></div>
+        <div id="review-list" class="sessions-list"></div>
+      </aside>
+      <section class="review-dashboard pane">
+        <div id="review-header" class="review-header empty">运行今日复盘后查看使用习惯</div>
+        <div id="review-content" class="review-content"></div>
+      </section>
+    </main>
+    <dialog id="settings-dialog">
+      <form id="settings-form" method="dialog">
+        <div class="dialog-title"><strong>Daily Review Settings</strong><button value="cancel" title="关闭">×</button></div>
+        <label class="field"><span>启用每日复盘</span><input name="enabled" type="checkbox" /></label>
+        <label class="field"><span>每日运行时间</span><input name="scheduleTime" type="time" required /></label>
+        <label class="field"><span>Skill 未使用阈值（天）</span><input name="inactiveSkillDays" type="number" min="1" max="3650" /></label>
+        <label class="field"><span>MCP 未使用阈值（天）</span><input name="inactiveMcpDays" type="number" min="1" max="3650" /></label>
+        <label class="field"><span>日报保留天数</span><input name="retentionDays" type="number" min="1" max="3650" /></label>
+        <div class="repository-path">日报仓库：<code id="data-root"></code></div>
+        <div id="settings-error" class="form-error"></div>
+        <div class="dialog-actions">
+          <button id="run-review" type="button">立即复盘今天</button>
+          <button class="primary" value="save">保存设置</button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
