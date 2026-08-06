@@ -50,6 +50,12 @@ const elements = {
   settingsForm: document.querySelector("#settings-form"),
   settingsError: document.querySelector("#settings-error"),
   settingsSaved: document.querySelector("#settings-saved"),
+  llmEnabled: document.querySelector("#llm-enabled"),
+  llmFields: document.querySelector("#llm-settings-fields"),
+  llmKeyState: document.querySelector("#llm-key-state"),
+  llmClearKeyField: document.querySelector("#llm-clear-key-field"),
+  llmTest: document.querySelector("#test-llm"),
+  llmTestStatus: document.querySelector("#llm-test-status"),
   traceRootSetting: document.querySelector("#trace-root-setting"),
   codexExecutable: document.querySelector("#codex-executable"),
   runReview: document.querySelector("#run-review"),
@@ -1041,6 +1047,10 @@ function renderSelectedReview() {
   const topScenario = scenarios[0];
   const topTool = rankedEntries(review.toolUsage || review.toolKinds, 1)[0];
   const inactiveCount = (review.cleanupRecommendations || []).length;
+  const llmAnalysis = review.llmAnalysis;
+  const llmMetric = llmAnalysis?.status === "completed"
+    ? `<span>LLM 分析 <strong>${escapeHtml(llmAnalysis.model || "已完成")}</strong></span>`
+    : llmAnalysis?.status === "failed" ? '<span>LLM 分析 <strong>失败，已降级</strong></span>' : "";
   const statGrid = `
     <div class="stat-grid">
       ${statCard("会话", summary.sessions)}${statCard("运行时回合", summary.runtimeTurns)}${statCard("模型调用", summary.modelCalls)}
@@ -1048,10 +1058,11 @@ function renderSelectedReview() {
       ${statCard("推理 Token", summary.reasoningTokens.toLocaleString())}${statCard("用户消息", summary.userMessages)}${statCard("缓存输入", summary.cachedInputTokens.toLocaleString())}
     </div>`;
   elements.reviewHeader.classList.remove("empty");
-  elements.reviewHeader.innerHTML = `<h1>${review.date} 使用复盘</h1><div class="metrics"><span class="review-generated">生成于 <strong>${new Date(review.generatedAtUnixMs).toLocaleString()}</strong></span><span>完成率 <strong>${completionRate.toFixed(0)}%</strong></span><span>活跃时间 <strong>${formatDuration(summary.activeMs)}</strong></span><span>缓存命中 <strong>${cacheRate.toFixed(1)}%</strong></span>${topScenario ? `<span>主场景 <strong>${escapeHtml(topScenario[0])}</strong></span>` : ""}${topTool ? `<span>高频工具 <strong>${escapeHtml(topTool[0])}</strong></span>` : ""}${inactiveCount ? `<span>长期未使用 <strong>${inactiveCount} 项</strong></span>` : ""}${delta === null ? "" : `<span>较前一日 <strong>${delta >= 0 ? "+" : ""}${delta} 个会话</strong></span>`}</div>`;
+  elements.reviewHeader.innerHTML = `<h1>${review.date} 使用复盘</h1><div class="metrics"><span class="review-generated">生成于 <strong>${new Date(review.generatedAtUnixMs).toLocaleString()}</strong></span><span>完成率 <strong>${completionRate.toFixed(0)}%</strong></span><span>活跃时间 <strong>${formatDuration(summary.activeMs)}</strong></span><span>缓存命中 <strong>${cacheRate.toFixed(1)}%</strong></span>${llmMetric}${topScenario ? `<span>规则主场景 <strong>${escapeHtml(topScenario[0])}</strong></span>` : ""}${topTool ? `<span>高频工具 <strong>${escapeHtml(topTool[0])}</strong></span>` : ""}${inactiveCount ? `<span>长期未使用 <strong>${inactiveCount} 项</strong></span>` : ""}${delta === null ? "" : `<span>较前一日 <strong>${delta >= 0 ? "+" : ""}${delta} 个会话</strong></span>`}</div>`;
   elements.reviewContent.innerHTML = `
-    ${reviewSection("使用习惯", `<ul class="habit-list">${(review.habits || []).map((habit) => `<li>${escapeHtml(habit)}</li>`).join("") || "<li>数据不足</li>"}</ul>`)}
-    ${reviewSection("使用场景", scenarioCards(review.scenarioUsage))}
+    ${llmAnalysisView(llmAnalysis)}
+    ${reviewSection("规则统计习惯", `<ul class="habit-list">${(review.habits || []).map((habit) => `<li>${escapeHtml(habit)}</li>`).join("") || "<li>数据不足</li>"}</ul>`)}
+    ${reviewSection("规则使用场景", scenarioCards(review.scenarioUsage))}
     <div class="review-columns">
       ${reviewSection("高频工具", usageBars(review.toolUsage || review.toolKinds, 12, "tool"))}
       ${reviewSection("Skill 使用", usageBars(review.skillUsage, 12, "skill"))}
@@ -1065,6 +1076,26 @@ function renderSelectedReview() {
     </div>
     ${reviewSection("长期未使用", inactiveUsage(review.cleanupRecommendations))}
   `;
+}
+
+function llmAnalysisView(analysis) {
+  if (!analysis) return "";
+  if (analysis.status === "failed") {
+    return reviewSection("LLM 智能分析", `<div class="llm-analysis-state failed"><strong>LLM 增强失败，当前日报仍使用完整的本地规则统计。</strong><span>${escapeHtml(analysis.error || "未知错误")}</span></div>`);
+  }
+  if (analysis.status === "skipped") {
+    return reviewSection("LLM 智能分析", `<div class="llm-analysis-state"><strong>本次未调用 LLM</strong><span>${escapeHtml(analysis.reason || "没有可分析的数据")}</span></div>`);
+  }
+  if (analysis.status !== "completed") return "";
+  const scenarios = (analysis.scenarios || []).map((scenario) => {
+    const tools = (scenario.tools || []).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
+    const skills = (scenario.skills || []).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
+    const evidence = (scenario.evidence || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+    return `<article class="llm-scenario"><h3>${escapeHtml(scenario.name)}</h3>${scenario.summary ? `<p>${escapeHtml(scenario.summary)}</p>` : ""}${evidence ? `<ul>${evidence}</ul>` : ""}${tools || skills ? `<div class="llm-tags">${tools}${skills}</div>` : ""}</article>`;
+  }).join("");
+  const habits = (analysis.habits || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const recommendations = (analysis.recommendations || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  return reviewSection("LLM 智能分析", `<div class="llm-analysis"><div class="llm-analysis-head"><span>OPENAI 兼容分析</span><strong>${escapeHtml(analysis.model || "未知模型")}</strong></div><p class="llm-overview">${escapeHtml(analysis.overview || "模型未提供总体总结。")}</p>${scenarios ? `<div class="llm-scenarios">${scenarios}</div>` : ""}<div class="llm-analysis-columns">${habits ? `<div><h3>模型识别的习惯</h3><ul>${habits}</ul></div>` : ""}${recommendations ? `<div><h3>改进建议</h3><ul>${recommendations}</ul></div>` : ""}</div></div>`);
 }
 
 function scenarioCards(record) {
@@ -1135,6 +1166,17 @@ async function openSettings() {
     elements.settingsForm.elements.inactiveSkillDays.value = state.settings.inactiveSkillDays;
     elements.settingsForm.elements.inactiveMcpDays.value = state.settings.inactiveMcpDays;
     elements.settingsForm.elements.retentionDays.value = state.settings.retentionDays;
+    elements.settingsForm.elements.llmEnabled.checked = state.settings.llmEnabled;
+    elements.settingsForm.elements.llmBaseUrl.value = state.settings.llmBaseUrl;
+    elements.settingsForm.elements.llmModel.value = state.settings.llmModel;
+    elements.settingsForm.elements.llmApiKey.value = "";
+    elements.settingsForm.elements.llmTimeoutSeconds.value = state.settings.llmTimeoutSeconds;
+    elements.settingsForm.elements.clearLlmApiKey.checked = false;
+    elements.llmKeyState.textContent = state.settings.llmApiKeyConfigured ? "已保存密钥，留空将继续使用" : "尚未保存密钥；本地服务可留空";
+    elements.llmClearKeyField.classList.toggle("hidden", !state.settings.llmApiKeyConfigured);
+    elements.llmTestStatus.textContent = "";
+    elements.llmTestStatus.className = "";
+    syncLlmSettingsFields();
     document.querySelector("#data-root").textContent = state.config?.dataRoot || state.settings.dataRoot;
     elements.traceRootSetting.textContent = state.config?.traceRoot || "未配置";
     elements.codexExecutable.textContent = state.config?.codexExecutable || "codex";
@@ -1146,6 +1188,23 @@ async function openSettings() {
   }
 }
 
+function syncLlmSettingsFields() {
+  elements.llmFields.disabled = !elements.llmEnabled.checked;
+}
+
+function llmSettingsPayload() {
+  const form = elements.settingsForm.elements;
+  const payload = {
+    llmEnabled: form.llmEnabled.checked,
+    llmBaseUrl: form.llmBaseUrl.value,
+    llmModel: form.llmModel.value,
+    llmTimeoutSeconds: Number(form.llmTimeoutSeconds.value),
+  };
+  if (form.llmApiKey.value.trim()) payload.llmApiKey = form.llmApiKey.value.trim();
+  if (form.clearLlmApiKey.checked) payload.clearLlmApiKey = true;
+  return payload;
+}
+
 async function saveSettings() {
   const form = elements.settingsForm.elements;
   const payload = {
@@ -1155,14 +1214,39 @@ async function saveSettings() {
     inactiveSkillDays: Number(form.inactiveSkillDays.value),
     inactiveMcpDays: Number(form.inactiveMcpDays.value),
     retentionDays: Number(form.retentionDays.value),
+    ...llmSettingsPayload(),
   };
   state.settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
+  form.llmApiKey.value = "";
+  form.clearLlmApiKey.checked = false;
   elements.settingsSaved.textContent = "已保存设置";
+}
+
+async function testLlmSettings() {
+  if (!elements.llmEnabled.checked) {
+    elements.llmTestStatus.className = "error-text";
+    elements.llmTestStatus.textContent = "请先启用 LLM 智能分析";
+    return;
+  }
+  if (!elements.settingsForm.reportValidity()) return;
+  elements.llmTest.disabled = true;
+  elements.llmTestStatus.className = "";
+  elements.llmTestStatus.textContent = "正在连接…";
+  try {
+    const result = await api("/api/settings/test-llm", { method: "POST", body: JSON.stringify(llmSettingsPayload()) });
+    elements.llmTestStatus.className = "success-text";
+    elements.llmTestStatus.textContent = `连接成功 · ${result.model} · ${result.latencyMs} ms`;
+  } catch (error) {
+    elements.llmTestStatus.className = "error-text";
+    elements.llmTestStatus.textContent = error.message;
+  } finally {
+    elements.llmTest.disabled = false;
+  }
 }
 
 async function runReviewNow() {
   elements.runReview.disabled = true;
-  elements.runReview.textContent = "正在归约并生成日报…";
+  elements.runReview.textContent = state.settings?.llmEnabled ? "正在归约、统计并调用 LLM…" : "正在归约并生成日报…";
   elements.settingsError.textContent = "";
   try {
     const review = await api("/api/reviews/run", { method: "POST" });
@@ -1212,6 +1296,8 @@ elements.graphZoomOut.addEventListener("click", () => applyGraphScale(elements.g
 wireTraceResizeHandle();
 document.querySelectorAll(".mode").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 elements.settingsButton.addEventListener("click", openSettings);
+elements.llmEnabled.addEventListener("change", syncLlmSettingsFields);
+elements.llmTest.addEventListener("click", testLlmSettings);
 elements.settingsDialog.addEventListener("close", () => {
   if (document.querySelector('.mode.active')?.dataset.mode === "settings") syncRouteFromHash();
 });

@@ -21,6 +21,11 @@ export function defaultSettings(dataRoot) {
     inactiveSkillDays: 30,
     inactiveMcpDays: 30,
     retentionDays: 365,
+    llmEnabled: false,
+    llmBaseUrl: "https://api.openai.com/v1",
+    llmModel: "",
+    llmApiKey: "",
+    llmTimeoutSeconds: 60,
     dataRoot,
     lastScheduledRunDate: null,
   };
@@ -41,7 +46,42 @@ export function validateSettings(input, current) {
       next[key] = value;
     }
   }
+  if (typeof input.llmEnabled === "boolean") next.llmEnabled = input.llmEnabled;
+  if (input.llmBaseUrl !== undefined) next.llmBaseUrl = validateLlmBaseUrl(input.llmBaseUrl);
+  if (input.llmModel !== undefined) {
+    if (typeof input.llmModel !== "string" || input.llmModel.trim().length > 200) throw new Error("llmModel must be a string up to 200 characters");
+    next.llmModel = input.llmModel.trim();
+  }
+  if (input.clearLlmApiKey === true) next.llmApiKey = "";
+  else if (input.llmApiKey !== undefined) {
+    if (typeof input.llmApiKey !== "string" || input.llmApiKey.trim().length > 4_096) throw new Error("llmApiKey must be a string up to 4096 characters");
+    next.llmApiKey = input.llmApiKey.trim();
+  }
+  if (input.llmTimeoutSeconds !== undefined) {
+    const value = Number(input.llmTimeoutSeconds);
+    if (!Number.isInteger(value) || value < 5 || value > 300) throw new Error("llmTimeoutSeconds must be an integer from 5 to 300");
+    next.llmTimeoutSeconds = value;
+  }
+  if (next.llmEnabled && !next.llmModel) throw new Error("启用 LLM 分析时必须填写模型名称");
   return next;
+}
+
+export function settingsForClient(settings) {
+  const { llmApiKey, ...visible } = settings;
+  return { ...visible, llmApiKeyConfigured: Boolean(llmApiKey) };
+}
+
+function validateLlmBaseUrl(value) {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 2_048) throw new Error("llmBaseUrl must be a URL up to 2048 characters");
+  let parsed;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new Error("llmBaseUrl must be a valid URL");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("llmBaseUrl must use http or https");
+  if (parsed.username || parsed.password) throw new Error("llmBaseUrl must not contain credentials");
+  return value.trim().replace(/\/+$/, "");
 }
 
 export async function loadSettings(dataRoot) {
@@ -493,6 +533,14 @@ export async function pruneReviews(dataRoot, retentionDays, now = Date.now()) {
 
 export function renderMarkdown(report) {
   const summary = report.summary;
+  const llm = report.llmAnalysis;
+  const llmLines = llm?.status === "completed" ? [
+    "", `## LLM Analysis (${llm.model || "unknown"})`, "", llm.overview || "",
+    "", "### Inferred Scenarios", "",
+    ...(llm.scenarios || []).map((item) => `- ${item.name}: ${item.summary || item.evidence?.join("; ") || ""}`),
+    "", "### LLM Habits", "", ...(llm.habits || []).map((item) => `- ${item}`),
+    "", "### Recommendations", "", ...(llm.recommendations || []).map((item) => `- ${item}`),
+  ] : llm?.status === "failed" ? ["", "## LLM Analysis", "", `- Failed: ${llm.error}`] : [];
   const lines = [
     `# Codex Daily Review - ${report.date}`, "",
     `- Sessions: ${summary.sessions} (${summary.completedSessions} completed)`,
@@ -510,6 +558,7 @@ export function renderMarkdown(report) {
     "", "## Skill Usage", "", ...entriesAsMarkdown(report.skillUsage),
     "", "## MCP Usage", "", ...entriesAsMarkdown(report.mcpUsage),
     "", "## Habits", "", ...report.habits.map((item) => `- ${item}`),
+    ...llmLines,
     "", "## Cleanup Candidates", "",
     ...report.cleanupRecommendations.map((item) => `- ${item.type}: ${item.id} - ${item.reason}`), "",
   ];

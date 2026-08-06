@@ -10,6 +10,7 @@ import {
   listReviews,
   loadSettings,
   saveSettings,
+  settingsForClient,
   shouldRunScheduledReview,
   storeReview,
   validateSettings,
@@ -26,8 +27,23 @@ test("schedule runs once after the configured local time", () => {
 test("settings validation accepts schedule changes and rejects bad values", () => {
   const current = defaultSettings("data");
   assert.equal(validateSettings({ scheduleTime: "08:15", inactiveSkillDays: 45 }, current).scheduleTime, "08:15");
+  const llmSettings = validateSettings({
+    llmEnabled: true,
+    llmBaseUrl: "http://127.0.0.1:11434/v1/",
+    llmModel: "local-model",
+    llmApiKey: "secret",
+    llmTimeoutSeconds: 90,
+  }, current);
+  const { llmApiKey: _llmApiKey, ...visibleLlmSettings } = llmSettings;
+  assert.deepEqual(settingsForClient(llmSettings), {
+    ...visibleLlmSettings,
+    llmApiKeyConfigured: true,
+  });
+  assert.equal(validateSettings({ clearLlmApiKey: true }, llmSettings).llmApiKey, "");
   assert.throws(() => validateSettings({ scheduleTime: "25:00" }, current), /HH:MM/);
   assert.throws(() => validateSettings({ inactiveMcpDays: 0 }, current), /inactiveMcpDays/);
+  assert.throws(() => validateSettings({ llmBaseUrl: "file:///tmp/model" }, current), /http or https/);
+  assert.throws(() => validateSettings({ llmEnabled: true }, current), /模型名称/);
 });
 
 test("scheduled run date persists across service restarts", async (context) => {

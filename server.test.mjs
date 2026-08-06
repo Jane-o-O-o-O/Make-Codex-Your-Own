@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createViewerServer, parseArgs, safeChild } from "./server.mjs";
+import { localDate } from "./insights.mjs";
 
 const fixtureRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -40,7 +41,26 @@ test("parseArgs rejects invalid ports and unknown arguments", () => {
 
 test("viewer serves trace state and referenced payloads", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "codex-viewer-"));
-  const server = createViewerServer({ traceRoot: fixtureRoot, dataRoot, codexHome: dataRoot, codex: path.join(dataRoot, "missing-codex") });
+  const llmRequests = [];
+  const fetchImpl = async (url, options) => {
+    const body = JSON.parse(options.body);
+    llmRequests.push({ url, headers: options.headers, body });
+    const isConnectionTest = body.messages[0].content.includes("连接测试");
+    const content = isConnectionTest ? "OK" : JSON.stringify({
+      overview: "主要用于项目检查",
+      scenarios: [{ name: "代码质量", summary: "检查项目风险", evidence: ["检查会话"], tools: ["exec_command"], skills: [] }],
+      habits: ["偏好先分析再修改"],
+      recommendations: ["继续补充自动化测试"],
+    });
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+  };
+  const server = createViewerServer({
+    traceRoot: fixtureRoot,
+    dataRoot,
+    codexHome: dataRoot,
+    codex: path.join(dataRoot, "missing-codex"),
+    fetchImpl,
+  });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(() => server.close());
   context.after(() => rm(dataRoot, { recursive: true, force: true }));
@@ -67,8 +87,33 @@ test("viewer serves trace state and referenced payloads", async (context) => {
   const settings = await fetch(`${base}/api/settings`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ scheduleTime: "08:45", inactiveSkillDays: 60 }),
+    body: JSON.stringify({
+      scheduleTime: "08:45",
+      inactiveSkillDays: 60,
+      llmEnabled: true,
+      llmBaseUrl: "https://llm.example/v1",
+      llmModel: "analysis-model",
+      llmApiKey: "private-key",
+    }),
   }).then((response) => response.json());
   assert.equal(settings.scheduleTime, "08:45");
   assert.equal(settings.inactiveSkillDays, 60);
+  assert.equal(settings.llmApiKeyConfigured, true);
+  assert.equal("llmApiKey" in settings, false);
+
+  const connection = await fetch(`${base}/api/settings/test-llm`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  }).then((response) => response.json());
+  assert.equal(connection.ok, true);
+
+  const review = await fetch(`${base}/api/reviews/run?date=${localDate(traces.traces[0].startedAtUnixMs)}`, {
+    method: "POST",
+  }).then((response) => response.json());
+  assert.equal(review.error, undefined, review.error);
+  assert.equal(review.llmAnalysis.status, "completed");
+  assert.equal(review.llmAnalysis.scenarios[0].name, "代码质量");
+  assert.equal(llmRequests.length, 2);
+  assert.equal(llmRequests[0].headers.authorization, "Bearer private-key");
 });

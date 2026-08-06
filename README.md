@@ -23,6 +23,8 @@ endorsed by OpenAI, Codex, or Langfuse.
   retry states.
 - Daily reviews covering completion rate, active time, model/provider usage,
   tools, tokens, cache usage, active hours, habits, and cleanup suggestions.
+- Optional OpenAI-compatible LLM analysis for dynamically inferred scenarios,
+  cross-signal habits, and improvement recommendations.
 - Local-only storage by default. Trace and report data never leave the machine.
 
 ## Requirements
@@ -125,6 +127,29 @@ reports/YYYY-MM-DD.md
 
 Cleanup rows are recommendations only. The viewer never deletes Skills, MCP
 configuration, reports, or trace bundles automatically.
+
+### Optional LLM Analysis
+
+The settings dialog can enable an additional OpenAI-compatible Chat
+Completions request after the deterministic report has been built. Configure:
+
+- API base URL, such as `https://api.openai.com/v1` or a compatible local
+  service. A full `/chat/completions` URL is also accepted.
+- Model name.
+- Optional API key. Local services that do not require authorization can leave
+  it blank.
+- Request timeout from 5 to 300 seconds.
+
+Use **Test connection** before saving. Manual and scheduled reviews share the
+same pipeline. If the model request times out, returns an error, or produces
+invalid JSON, the local rule-based report is still stored and the failure is
+shown in the report instead of aborting the daily review.
+
+Only bounded aggregate metrics, top usage entries, cleanup signals, and
+already-redacted prompt previews are sent to the configured endpoint. Raw
+payloads, source code, and complete command output are not included. The API
+key is stored in the local `settings.json`, is never returned by the settings
+API, and should be protected like any other local credential.
 
 ## Privacy and Security
 

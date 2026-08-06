@@ -62,6 +62,18 @@
         <div class="dialog-title"><strong>监测与复盘设置</strong><button value="cancel" title="关闭">×</button></div>
         <div class="settings-group"><h3>采集设置</h3><p>Trace 只写入本机目录，不会发送到 Langfuse 或其他服务。</p><div class="repository-path">Trace 根目录：<code id="trace-root-setting"></code><br />Codex CLI：<code id="codex-executable"></code></div></div>
         <div class="settings-group"><h3>每日复盘</h3><label class="field"><span>启用每日复盘</span><input name="enabled" type="checkbox" /></label><label class="field"><span>每日运行时间</span><input name="scheduleTime" type="time" required /></label></div>
+        <div class="settings-group llm-settings-group">
+          <div class="settings-group-heading"><div><h3>LLM 智能分析</h3><p>可选增强。使用 OpenAI 兼容的 Chat Completions 接口重新归纳场景、习惯和改进建议。</p></div><label class="compact-toggle"><span>启用</span><input id="llm-enabled" name="llmEnabled" type="checkbox" /></label></div>
+          <fieldset id="llm-settings-fields" class="settings-fieldset">
+            <label class="field"><span>API 基础地址</span><input name="llmBaseUrl" type="url" placeholder="https://api.openai.com/v1" required /></label>
+            <label class="field"><span>模型名称</span><input name="llmModel" type="text" placeholder="gpt-5-mini 或兼容模型" autocomplete="off" required /></label>
+            <label class="field"><span>API Key</span><span class="key-input"><input name="llmApiKey" type="password" placeholder="本地服务可留空" autocomplete="new-password" /><small id="llm-key-state">尚未保存密钥</small></span></label>
+            <label id="llm-clear-key-field" class="field checkbox-field hidden"><span>清除密钥</span><input name="clearLlmApiKey" type="checkbox" /></label>
+            <label class="field"><span>超时时间（秒）</span><input name="llmTimeoutSeconds" type="number" min="5" max="300" /></label>
+            <div class="llm-test-row"><button id="test-llm" type="button">测试连接</button><span id="llm-test-status" role="status"></span></div>
+            <div class="llm-privacy-note">调用时会把聚合指标和经过裁剪、脱敏的提示预览发送到所填 API，不会发送原始 Payload、源码或完整命令输出。API Key 仅保存在本机日报目录的设置文件中。</div>
+          </fieldset>
+        </div>
         <div class="settings-group"><h3>数据保留与建议</h3><label class="field"><span>工具未使用阈值（天）</span><input name="inactiveToolDays" type="number" min="1" max="3650" /></label><label class="field"><span>Skill 未使用阈值（天）</span><input name="inactiveSkillDays" type="number" min="1" max="3650" /></label><label class="field"><span>MCP 未使用阈值（天）</span><input name="inactiveMcpDays" type="number" min="1" max="3650" /></label><label class="field"><span>日报保留天数</span><input name="retentionDays" type="number" min="1" max="3650" /></label></div>
         <div class="repository-path">日报仓库：<code id="data-root"></code><br />敏感内容可能包含提示词、源码、路径和命令输出。</div>
         <div id="settings-error" class="form-error" role="alert"></div><div id="settings-saved" class="settings-saved" role="status"></div>

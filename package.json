@@ -22,7 +22,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test server.test.mjs insights.test.mjs trace-detail.test.mjs"
+    "test": "node --test server.test.mjs insights.test.mjs llm-review.test.mjs trace-detail.test.mjs"
   },
   "engines": {
     "node": ">=22"

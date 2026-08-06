@@ -14,10 +14,12 @@ import {
   localDate,
   pruneReviews,
   saveSettings,
+  settingsForClient,
   shouldRunScheduledReview,
   storeReview,
   validateSettings,
 } from "./insights.mjs";
+import { analyzeDailyReview, testLlmConnection } from "./llm-review.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(here, "public");
@@ -238,6 +240,7 @@ export function createViewerServer(options) {
   options = {
     dataRoot: path.join(here, ".codex-insights"),
     codexHome: process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
+    fetchImpl: globalThis.fetch,
     ...options,
   };
   const reducing = new Map();
@@ -245,13 +248,19 @@ export function createViewerServer(options) {
 
   async function reduceBundle(bundle) {
     const bundleDir = safeChild(options.traceRoot, bundle.id);
+    const statePath = path.join(bundleDir, "state.json");
+    if (await exists(statePath)) {
+      const trace = await readJson(statePath);
+      Object.defineProperty(trace, "__bundleId", { value: bundle.id, enumerable: false });
+      return trace;
+    }
     let pending = reducing.get(bundleDir);
     if (!pending) {
       pending = runReducer(options.codex, bundleDir).finally(() => reducing.delete(bundleDir));
       reducing.set(bundleDir, pending);
     }
     await pending;
-    const trace = await readJson(path.join(bundleDir, "state.json"));
+    const trace = await readJson(statePath);
     Object.defineProperty(trace, "__bundleId", { value: bundle.id, enumerable: false });
     return trace;
   }
@@ -268,6 +277,22 @@ export function createViewerServer(options) {
     const previousReviews = storedReviews.filter((review) => review.date !== date);
     const settings = await settingsPromise;
     const report = await buildDailyReview({ date, traces, inventory, previousReviews, bundleRoot: options.traceRoot, settings });
+    if (settings.llmEnabled) {
+      if (report.summary.sessions === 0) {
+        report.llmAnalysis = { status: "skipped", model: settings.llmModel, reason: "当天没有可分析的会话" };
+      } else {
+        try {
+          report.llmAnalysis = await analyzeDailyReview(report, settings, { fetchImpl: options.fetchImpl });
+        } catch (error) {
+          report.llmAnalysis = {
+            status: "failed",
+            model: settings.llmModel,
+            generatedAtUnixMs: Date.now(),
+            error: safeLlmError(error, settings.llmApiKey),
+          };
+        }
+      }
+    }
     await storeReview(report, options.dataRoot);
     await pruneReviews(options.dataRoot, settings.retentionDays);
     if (markScheduled) {
@@ -297,10 +322,16 @@ export function createViewerServer(options) {
           const updated = validateSettings(await readBody(request), settings);
           await saveSettings(updated);
           settingsPromise = Promise.resolve(updated);
-          json(response, 200, updated);
+          json(response, 200, settingsForClient(updated));
         } else {
-          json(response, 200, settings);
+          json(response, 200, settingsForClient(settings));
         }
+        return;
+      }
+      if (url.pathname === "/api/settings/test-llm" && request.method === "POST") {
+        const current = await settingsPromise;
+        const draft = validateSettings({ ...await readBody(request), llmEnabled: true }, current);
+        json(response, 200, await testLlmConnection(draft, { fetchImpl: options.fetchImpl }));
         return;
       }
       if (url.pathname === "/api/inventory") {
@@ -385,6 +416,12 @@ export function createViewerServer(options) {
   scheduler.unref();
   server.on("close", () => clearInterval(scheduler));
   return server;
+}
+
+function safeLlmError(error, apiKey) {
+  let message = error instanceof Error ? error.message : String(error);
+  if (apiKey) message = message.replaceAll(apiKey, "[已隐藏密钥]");
+  return message.length > 600 ? `${message.slice(0, 599)}…` : message;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
