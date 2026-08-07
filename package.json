@@ -20,9 +20,50 @@
     "daily-review"
   ],
   "type": "module",
+  "main": "desktop/main.mjs",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test server.test.mjs insights.test.mjs llm-review.test.mjs trace-detail.test.mjs"
+    "test": "node --test server.test.mjs insights.test.mjs llm-review.test.mjs trace-detail.test.mjs",
+    "desktop": "electron .",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.jane.codextraceviewer",
+    "productName": "Codex Trace Viewer",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "public/**/*",
+      "server.mjs",
+      "insights.mjs",
+      "llm-review.mjs",
+      "package.json",
+      "ABOUT.md",
+      "LICENSE"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Codex Trace Viewer"
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.0"
   },
   "engines": {
     "node": ">=22"

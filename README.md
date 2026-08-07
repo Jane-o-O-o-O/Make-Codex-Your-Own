@@ -42,9 +42,9 @@ Codex 很强，但原始运行过程通常分散在终端输出、会话文件�
 
 ### 环境要求
 
-- Node.js 22 或更高版本。
+- Node.js 22 或更高版本（开发和从源码运行时需要）。
 - 能写入 rollout trace 的 Codex CLI 或本地 Codex App runtime。
-- Windows 用户可以使用 PowerShell 启动桌面窗口；服务本身也可以在其他平台运行。
+- Windows 用户可以安装 Electron 桌面版；只使用已打包的安装程序时不需要单独安装 Node.js。
 
 ### 第一步：给 Codex 指定 trace 目录
 
@@ -68,21 +68,30 @@ $env:CODEX_INSIGHTS_ROOT = "E:\codex-insights"
 codex
 ```
 
-### 第二步：打开桌面工作台
+### 第二步：打开 Electron 桌面工作台
 
-在项目目录双击：
+首次从源码运行时安装 Electron 依赖：
+
+```powershell
+npm install
+npm run desktop
+```
+
+Electron 主进程会自动启动本地 viewer 服务，使用随机 loopback 端口创建原生 `BrowserWindow`，关闭桌面窗口时也会关闭对应服务，不依赖 Edge 标签页，也不会和 `4319` 上的独立服务冲突。
+
+要生成 Windows 安装程序：
+
+```powershell
+npm run dist:win
+```
+
+安装程序会输出到 `dist/`，默认创建桌面快捷方式和开始菜单快捷方式。安装后的 Electron 应用可以直接启动，不需要再执行 PowerShell 脚本。
+
+如果当前机器不方便安装 Electron，项目仍保留一个轻量的 Edge App 兼容入口：
 
 ```text
 open-desktop.cmd
 ```
-
-或者运行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\open-desktop.ps1
-```
-
-它会复用已经运行的本地服务；如果 `4319` 端口没有服务，会自动启动一个。桌面窗口使用 Edge App 模式，没有地址栏和普通标签页。
 
 如果不需要桌面窗口，也可以直接打开：
 
@@ -179,7 +188,7 @@ powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
 powershell -ExecutionPolicy Bypass -File .\uninstall-windows.ps1
 ```
 
-这项任务负责启动本地 Node 服务。桌面窗口仍然可以通过 `open-desktop.cmd` 打开。
+这项任务负责启动本地 Node 服务。Electron 桌面版可以从开始菜单或桌面快捷方式启动；开发环境也可以继续使用 `npm run desktop`。
 
 ## 命令行参数和目录
 
@@ -217,12 +226,13 @@ node server.mjs `
 
 ## 技术架构
 
-项目分成四层：
+项目分成五层：
 
 1. **Codex runtime**：在本地写入有序 raw event 和 Payload 引用。
 2. **Reducer**：调用 `codex debug trace-reduce <bundle-directory>`，将 raw bundle 还原成语义化 Trace graph。
 3. **Node.js viewer service**：发现 bundle、读取 state、提供本地 API、执行每日复盘和定时任务。
-4. **桌面工作台 UI**：纯 HTML/CSS/JavaScript，运行在 Edge App/PWA 窗口中，不需要前端构建工具。
+4. **Electron main process**：创建原生窗口、启动/关闭 viewer service、处理单实例和本地 URL。
+5. **Renderer UI**：纯 HTML/CSS/JavaScript，在 Electron `BrowserWindow` 中展示 Trace 工作台，不需要 React、Webpack 或前端构建链。
 
 原始数据和归约数据的区别很重要：Raw bundle 是证据，`state.json` 是可浏览的语义图。Ready session 会直接读取 `state.json`，不会重复归约；Raw session 只有在用户明确请求时才会归约。
 
@@ -232,12 +242,13 @@ node server.mjs `
 server.mjs                本地 HTTP API、bundle 发现、归约和调度器
 insights.mjs              每日复盘聚合、设置、日报持久化
 llm-review.mjs            OpenAI 兼容 LLM 分析链路
+desktop/main.mjs          Electron 主进程和原生窗口生命周期
 public/index.html         工作台页面结构
 public/app.js             路由、状态、交互和日报渲染
 public/trace-detail.js    Trace 树和节点详情归一化
 public/styles.css         深色、响应式桌面工作台样式
-open-desktop.ps1          Windows 桌面窗口启动器
-open-desktop.cmd          可双击的 Windows 启动入口
+open-desktop.ps1          Edge App 兼容启动器
+open-desktop.cmd          Edge App 可双击启动入口
 fixtures/                 小型确定性测试 bundle
 ```
 
@@ -279,7 +290,7 @@ Trace 可能包含提示词、模型响应、工具参数、命令输出、本�
 
 ## 开发与测试
 
-项目运行时不需要额外依赖，使用 Node.js 内置模块和浏览器 API。运行测试：
+viewer 服务本身使用 Node.js 内置模块和浏览器 API；Electron 只作为桌面程序运行时和打包工具。运行测试：
 
 ```powershell
 npm test
@@ -287,6 +298,12 @@ node --check server.mjs
 node --check public/app.js
 node --check public/trace-detail.js
 git diff --check
+```
+
+开发桌面版：
+
+```powershell
+npm run desktop
 ```
 
 服务启动：
