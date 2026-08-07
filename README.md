@@ -61,6 +61,26 @@ npm start -- --trace-root E:\codex-traces --data-root E:\codex-insights
 The trace environment variable must be present when Codex starts. Restart
 Codex after changing it.
 
+## Desktop Window
+
+On Windows, the viewer can run as a standalone Edge application window instead
+of a normal browser tab. This keeps the existing local Node server and opens a
+separate desktop-style window with no address bar:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\open-desktop.ps1
+```
+
+You can also double-click `open-desktop.cmd` from File Explorer.
+
+The launcher reuses an existing viewer on port `4319`, or starts one with the
+configured trace, insights, Codex executable, and `CODEX_HOME` paths. The page
+also exposes a PWA manifest, so Edge can install it from the application menu
+as `Codex Trace Viewer` after the first launch.
+
+This is a local desktop shell around the same viewer; trace collection remains
+performed by Codex and the viewer never uploads data.
+
 ## Windows Autostart
 
 From the repository directory, run:

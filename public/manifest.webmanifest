@@ -1,0 +1,18 @@
+{
+  "name": "Codex Trace Viewer",
+  "short_name": "Codex Trace",
+  "description": "Local Codex trace observability and daily review workspace.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101114",
+  "theme_color": "#101114",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

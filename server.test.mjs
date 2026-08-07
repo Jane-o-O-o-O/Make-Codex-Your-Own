@@ -67,6 +67,12 @@ test("viewer serves trace state and referenced payloads", async (context) => {
   const address = server.address();
   const base = `http://127.0.0.1:${address.port}`;
 
+  const manifestResponse = await fetch(`${base}/manifest.webmanifest`);
+  assert.equal(manifestResponse.headers.get("content-type"), "application/manifest+json; charset=utf-8");
+  assert.equal((await manifestResponse.json()).display, "standalone");
+  const iconResponse = await fetch(`${base}/icon.svg`);
+  assert.equal(iconResponse.headers.get("content-type"), "image/svg+xml");
+
   const traces = await fetch(`${base}/api/traces`).then((response) => response.json());
   assert.equal(traces.traces[0].rolloutId, "rollout-sample");
   assert.equal(traces.traces[0].status, "completed");
